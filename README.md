@@ -1,0 +1,120 @@
+# AgentMesh
+
+> Real-time visibility and coordination for multi-agent AI systems.
+
+**Status:** Early design phase — contributions and feedback welcome.
+
+## The Problem
+
+Multi-agent coordination failures account for **36.9% of all AI agent system failures** — and they compound 17x in unstructured "bag of agents" systems. When you have 5 agents running in parallel, you have no idea which one is stuck, which finished, what they're doing, or why one failed silently.
+
+AgentMesh solves this.
+
+## What It Is
+
+AgentMesh is an open-source observability and coordination layer for multi-agent AI systems. Add one decorator to your agents, run `agentmesh up`, and get a real-time dashboard showing every agent, every message, every tool call — live.
+
+```
+┌─────────────────────────────────────────┐
+│  AgentMesh Cloud  (hosted, coming soon)  │
+├─────────────────────────────────────────┤
+│  AgentMesh Dashboard  (React, localhost) │  ← live agent graph
+├─────────────────────────────────────────┤
+│  AgentMesh Daemon  (FastAPI + SQLite)    │  ← event store
+├─────────────────────────────────────────┤
+│  AgentMesh SDK  (Python + TypeScript)    │  ← zero-friction instrumentation
+├─────────────────────────────────────────┤
+│  AMP — AgentMesh Protocol  (event spec) │  ← open standard
+└─────────────────────────────────────────┘
+```
+
+## Quick Start (coming soon)
+
+```bash
+pip install agentmesh
+agentmesh up  # starts daemon + dashboard at localhost:7777
+```
+
+```python
+from agentmesh import mesh
+
+@mesh.agent(name="researcher")
+async def researcher_agent(task: str) -> str:
+    # your existing agent code — zero changes needed
+    result = await call_llm(task)
+    return result
+
+@mesh.agent(name="orchestrator")
+async def orchestrator(task: str):
+    results = await asyncio.gather(
+        researcher_agent(task),
+        writer_agent(task),
+    )
+    return combine(results)
+```
+
+Open `localhost:7777` → see your agents as a live graph. Nodes = agents. Edges = messages. Colors = status.
+
+## Framework Support (v0.1 target)
+
+| Framework | Adapter |
+|-----------|---------|
+| Claude Agent SDK | `agentmesh.adapters.claude` |
+| LangGraph | `agentmesh.adapters.langgraph` |
+| OpenAI Agents SDK | `agentmesh.adapters.openai` |
+| CrewAI | `agentmesh.adapters.crewai` |
+| Raw Python | `@mesh.agent` decorator |
+| TypeScript | `@agentmesh/sdk` |
+
+## The AMP Event Spec
+
+Every agent emits structured events:
+
+```json
+{
+  "event": "agent.tool.called",
+  "agent_id": "researcher-01",
+  "parent_agent_id": "orchestrator-01",
+  "task_id": "task-abc123",
+  "timestamp": "2026-03-17T21:00:00Z",
+  "payload": {
+    "tool": "web_search",
+    "input": "latest AI agent frameworks 2026"
+  }
+}
+```
+
+Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.sent`, `agent.message.received`, `agent.tool.called`, `agent.tool.returned`
+
+## Roadmap
+
+### v0.1 — See Everything
+- [ ] AMP protocol spec
+- [ ] Python SDK (`@mesh.agent` decorator)
+- [ ] AgentMesh Daemon (FastAPI + SQLite)
+- [ ] Real-time Dashboard (React + WebSocket)
+- [ ] Claude Agent SDK adapter
+- [ ] LangGraph adapter
+
+### v0.2 — Understand Everything
+- [ ] Timeline view (what ran, how long, what failed)
+- [ ] Replay mode (replay any run from events)
+- [ ] OpenAI Agents SDK adapter
+- [ ] CrewAI adapter
+- [ ] TypeScript SDK
+
+### v0.3 — Fix Everything
+- [ ] Diff view (compare two runs)
+- [ ] Cost tracking per agent
+- [ ] Circuit breakers (auto-stop runaway agents)
+- [ ] Alert rules
+
+### v1.0 — Ship to Production
+- [ ] AgentMesh Cloud (hosted)
+- [ ] Team collaboration
+- [ ] Agent evaluation (LLM-as-judge)
+- [ ] Regression test suite for agent behavior
+
+## License
+
+Apache 2.0
