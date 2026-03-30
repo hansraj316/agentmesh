@@ -2,7 +2,14 @@
 
 > Real-time visibility and coordination for multi-agent AI systems.
 
+[![Indian Avengers](https://img.shields.io/badge/Managed%20By-Indian%20Avengers-orange?style=flat-square&logo=gitbook)](https://github.com/hansraj316/mission-control-openclaw)
+[![Status](https://img.shields.io/badge/Status-Sentinel%20Audited-green?style=flat-square)](https://github.com/hansraj316/agentmesh)
+
 **Status:** Early design phase — contributions and feedback welcome.
+
+## The Mission
+
+AgentMesh is a core technical pillar of the **Indian Avengers** organization. It provides the observability required to scale a multi-agent "GitHub Factory" toward the **$1,000,000 revenue goal**. Every agent, from **Anusandhan (The Sentinel)** to **Parmanu (Engineering Commander)**, uses AgentMesh to ensure coordination is flawless and shipping is daily.
 
 ## The Problem
 
