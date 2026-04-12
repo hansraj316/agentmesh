@@ -125,3 +125,7 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 ## License
 
 Apache 2.0
+
+## Reference Implementation
+
+[Mission Control](https://github.com/hansraj316/mission-control-openclaw) is a working AgentMesh-style dashboard built with Python + SQLite, battle-tested with a 25-agent autonomous AI organization. It implements the core visibility loop: real-time agent status, session timeline, health scores, security telemetry, and a cron/job runner. AgentMesh v0.1 will generalize this into an installable SDK + daemon.
