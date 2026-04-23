@@ -42,6 +42,18 @@ pip install agentmesh
 agentmesh up  # starts daemon + dashboard at localhost:7777
 ```
 
+## One-command growth agent MVP
+
+Run a landing-page audit + copy rewrite + publish checklist behind a narrow paid-test offer:
+
+```bash
+python3 tools/growth_agent.py "https://example.com"
+```
+
+- Output: `reports/growth-agent-report.md`
+- Defaults: **Landing Page Conversion Sprint (Paid Test)**, **$1,500 fixed**, **5 business days**
+- Docs: `docs/growth-agent-mvp.md`
+
 ```python
 from agentmesh import mesh
 
