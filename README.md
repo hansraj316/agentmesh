@@ -15,8 +15,6 @@ AgentMesh is a core technical pillar of the **Indian Avengers** organization. It
 
 Multi-agent coordination failures account for **36.9% of all AI agent system failures** — and they compound 17x in unstructured "bag of agents" systems. When you have 5 agents running in parallel, you have no idea which one is stuck, which finished, what they're doing, or why one failed silently.
 
-AgentMesh solves this.
-
 ## What It Is
 
 AgentMesh is an open-source observability and coordination layer for multi-agent AI systems. Add one decorator to your agents, run `agentmesh up`, and get a real-time dashboard showing every agent, every message, every tool call — live.
