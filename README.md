@@ -129,6 +129,47 @@ running. v0.1 events without span ids still work — they render as a flat
 tree, paired by agent and event order. `--db PATH` points at a different
 event database.
 
+## Alerting
+
+Declare alert rules in `~/.agentmesh/alerts.json` (override with the
+`AGENTMESH_ALERTS` environment variable or `--rules PATH`). Two rule types
+exist today: `silent` fires when an agent's latest event is older than
+`max_silence_minutes`, and `failure_streak` fires when its
+consecutive-failure streak reaches `min_streak`. `"agent": "*"` checks every
+agent.
+
+```json
+[
+  {"name": "fleet-quiet", "type": "silent", "agent": "*", "max_silence_minutes": 120},
+  {"name": "deploy-broken", "type": "failure_streak", "agent": "openclaw/deploy", "min_streak": 2}
+]
+```
+
+Evaluate the rules against the event store:
+
+```bash
+agentmesh alerts
+```
+
+```
+| Rule | Severity | Agent | Message |
+|------|----------|-------|---------|
+| fleet-quiet | 🟡 warning | agentmesh/daily-ci | agent agentmesh/daily-ci has been silent for 184m (max 120m) |
+| deploy-broken | 🔴 critical | openclaw/deploy | agent openclaw/deploy has failed 2 runs in a row (min 2) |
+```
+
+`--webhook URL` POSTs one JSON payload per fired alert —
+`{"source": "agentmesh", "severity", "title", "body", "details", "fired_at"}` —
+ready for Slack bridges, PagerDuty, or your own receiver. `--exit-code` makes
+the command exit 1 when anything fired, so one cron line (or CI step) can
+re-ingest and alert in one go:
+
+```bash
+agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50 && agentmesh alerts --exit-code
+```
+
+`--db PATH` points at a different event database, as with `trace`.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
@@ -181,7 +222,7 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 - [ ] Diff view (compare two runs)
 - [ ] Cost tracking per agent
 - [ ] Circuit breakers (auto-stop runaway agents)
-- [ ] Alert rules
+- [x] Alert rules (`agentmesh alerts` — silence + failure-streak rules, webhook output)
 
 ### v1.0 — Ship to Production
 - [ ] AgentMesh Cloud (hosted)

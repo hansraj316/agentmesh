@@ -6,6 +6,7 @@ Usage::
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
     agentmesh board [--since ISO] [--html PATH] [--out PATH]
     agentmesh trace RUN_ID [--db PATH]
+    agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
 """
 
 import argparse
@@ -15,6 +16,13 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from agentmesh.alerts import (
+    evaluate,
+    load_rules,
+    post_webhook,
+    render_alerts_markdown,
+    to_webhook_payloads,
+)
 from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
@@ -112,6 +120,35 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
     )
+
+    alerts = subparsers.add_parser(
+        "alerts",
+        help="Evaluate alert rules against stored events.",
+    )
+    alerts.add_argument(
+        "--rules",
+        default=None,
+        metavar="PATH",
+        help="Rules file (default: $AGENTMESH_ALERTS or ~/.agentmesh/alerts.json).",
+    )
+    alerts.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+    alerts.add_argument(
+        "--webhook",
+        default=None,
+        metavar="URL",
+        help="POST each fired alert to this URL as JSON.",
+    )
+    alerts.add_argument(
+        "--exit-code",
+        action="store_true",
+        dest="exit_code",
+        help="Exit 1 if any alert fired (for CI/cron use).",
+    )
     return parser
 
 
@@ -166,6 +203,24 @@ def _trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _alerts(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        rules = load_rules(args.rules)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    alerts = evaluate(store, rules)
+    if not alerts:
+        print("No alerts.")
+        return 0
+    print(render_alerts_markdown(alerts))
+    if args.webhook:
+        for payload in to_webhook_payloads(alerts):
+            post_webhook(args.webhook, payload)
+    return 1 if args.exit_code else 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -176,6 +231,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _board(args)
     if args.command == "trace":
         return _trace(args)
+    if args.command == "alerts":
+        return _alerts(args)
     return 2
 
 
