@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentmesh"
+version = "0.1.0"
+description = "Real-time visibility and coordination for multi-agent AI systems."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Hansraj Singh Thakur" }]
+keywords = ["agents", "observability", "multi-agent", "tracing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/hansraj316/agentmesh"
+
+[project.scripts]
+agentmesh = "agentmesh.cli:main"
+
+[tool.setuptools]
+packages = ["agentmesh"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
