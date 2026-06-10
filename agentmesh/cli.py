@@ -5,6 +5,7 @@ Usage::
     agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow]
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
     agentmesh board [--since ISO] [--html PATH] [--out PATH]
+    agentmesh trace RUN_ID [--db PATH]
 """
 
 import argparse
@@ -18,6 +19,7 @@ from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.store import EventStore
+from agentmesh.trace import build_trace, render_tree
 
 _FOLLOW_POLL_SECONDS = 0.5
 
@@ -98,6 +100,18 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Write the markdown dashboard to a file instead of stdout.",
     )
+
+    trace = subparsers.add_parser(
+        "trace",
+        help="Print the span tree of one run.",
+    )
+    trace.add_argument("run_id", help="The run_id to trace.")
+    trace.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
     return parser
 
 
@@ -141,6 +155,17 @@ def _board(args: argparse.Namespace) -> int:
     return 0
 
 
+def _trace(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        trace = build_trace(store, args.run_id)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    print(render_tree(trace))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -149,6 +174,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _ingest_gha(args)
     if args.command == "board":
         return _board(args)
+    if args.command == "trace":
+        return _trace(args)
     return 2
 
 

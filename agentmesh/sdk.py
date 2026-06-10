@@ -17,6 +17,20 @@ _current_run_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "agentmesh_run_id", default=None
 )
 
+_current_span_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "agentmesh_span_id", default=None
+)
+
+
+def _new_span_fields() -> Dict[str, str]:
+    """Span payload fields for a fresh invocation: its own span_id plus the
+    caller's span as ``parent_span_id``, if there is one (AMP v0.2)."""
+    fields = {"span_id": str(uuid.uuid4())}
+    parent = _current_span_id.get()
+    if parent is not None:
+        fields["parent_span_id"] = parent
+    return fields
+
 
 class Mesh:
     """Entry point for instrumenting agents.
@@ -55,65 +69,78 @@ class Mesh:
         Emits ``agent_start`` before the call, ``agent_end`` (with
         ``duration_ms``) on success, and ``agent_error`` (with exception
         info) on raise — the exception is re-raised unchanged.
+
+        Each call gets a fresh ``span_id``; nested decorated calls record
+        the enclosing call's span as ``parent_span_id`` (AMP v0.2), so a
+        trace tree can be rebuilt with ``agentmesh trace RUN_ID``.
         """
 
         def decorator(fn: F) -> F:
             function_name = getattr(fn, "__qualname__", getattr(fn, "__name__", name))
 
-            def _start(run_id: str) -> float:
-                self._emit(run_id, name, "agent_start", {"function": function_name})
+            def _start(run_id: str, span: Dict[str, str]) -> float:
+                payload: Dict[str, Any] = {"function": function_name}
+                payload.update(span)
+                self._emit(run_id, name, "agent_start", payload)
                 return time.perf_counter()
 
-            def _end(run_id: str, started: float) -> None:
-                duration_ms = (time.perf_counter() - started) * 1000.0
-                self._emit(
-                    run_id,
-                    name,
-                    "agent_end",
-                    {"function": function_name, "duration_ms": duration_ms},
-                )
+            def _end(run_id: str, started: float, span: Dict[str, str]) -> None:
+                payload: Dict[str, Any] = {
+                    "function": function_name,
+                    "duration_ms": (time.perf_counter() - started) * 1000.0,
+                }
+                payload.update(span)
+                self._emit(run_id, name, "agent_end", payload)
 
-            def _error(run_id: str, started: float, exc: BaseException) -> None:
-                duration_ms = (time.perf_counter() - started) * 1000.0
-                self._emit(
-                    run_id,
-                    name,
-                    "agent_error",
-                    {
-                        "function": function_name,
-                        "duration_ms": duration_ms,
-                        "error": str(exc),
-                        "error_type": type(exc).__name__,
-                    },
-                )
+            def _error(
+                run_id: str, started: float, exc: BaseException, span: Dict[str, str]
+            ) -> None:
+                payload: Dict[str, Any] = {
+                    "function": function_name,
+                    "duration_ms": (time.perf_counter() - started) * 1000.0,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+                payload.update(span)
+                self._emit(run_id, name, "agent_error", payload)
 
             if inspect.iscoroutinefunction(fn):
 
                 @functools.wraps(fn)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                     run_id = _current_run_id.get() or str(uuid.uuid4())
-                    started = _start(run_id)
+                    span = _new_span_fields()
+                    token = _current_span_id.set(span["span_id"])
                     try:
-                        result = await fn(*args, **kwargs)
-                    except BaseException as exc:
-                        _error(run_id, started, exc)
-                        raise
-                    _end(run_id, started)
-                    return result
+                        started = _start(run_id, span)
+                        try:
+                            result = await fn(*args, **kwargs)
+                        except BaseException as exc:
+                            _error(run_id, started, exc, span)
+                            raise
+                        _end(run_id, started, span)
+                        return result
+                    finally:
+                        _current_span_id.reset(token)
 
                 return async_wrapper  # type: ignore[return-value]
 
             @functools.wraps(fn)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run_id = _current_run_id.get() or str(uuid.uuid4())
-                started = _start(run_id)
+                span = _new_span_fields()
+                token = _current_span_id.set(span["span_id"])
                 try:
-                    result = fn(*args, **kwargs)
-                except BaseException as exc:
-                    _error(run_id, started, exc)
-                    raise
-                _end(run_id, started)
-                return result
+                    started = _start(run_id, span)
+                    try:
+                        result = fn(*args, **kwargs)
+                    except BaseException as exc:
+                        _error(run_id, started, exc, span)
+                        raise
+                    _end(run_id, started, span)
+                    return result
+                finally:
+                    _current_span_id.reset(token)
 
             return sync_wrapper  # type: ignore[return-value]
 
