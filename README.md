@@ -106,6 +106,29 @@ agentmesh board
 the markdown to a file, and `--html board.html` also writes a self-contained
 HTML dashboard (inline CSS, no JavaScript) you can open in any browser.
 
+## Trace a run
+
+Nested `@mesh.agent` calls are linked automatically: every invocation gets a
+`span_id` and records its caller as `parent_span_id`
+([AMP v0.2](docs/amp-spec.md), async-safe via contextvars). Render any run as
+a span tree:
+
+```bash
+agentmesh trace my-run-42
+```
+
+```
+run my-run-42 — 3 spans, 1 failed, total 4.2s
+└─ orchestrator ✓ 4.1s
+   ├─ researcher ✓ 2.0s
+   └─ writer ✗ 1.3s — ValueError: bad draft
+```
+
+`✓` ended ok, `✗` failed (with the first line of the error), `…` still
+running. v0.1 events without span ids still work — they render as a flat
+tree, paired by agent and event order. `--db PATH` points at a different
+event database.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
