@@ -68,6 +68,28 @@ class EventStore:
                 ),
             )
 
+    def append_ignore_duplicates(self, event: Event) -> bool:
+        """Persist one event, skipping it if its event_id is already stored.
+
+        Returns True if the event was inserted, False if it was a duplicate.
+        Used by ingestors with deterministic event ids to stay idempotent.
+        """
+        event.validate()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO events (event_id, run_id, agent, type, ts, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    event.event_id,
+                    event.run_id,
+                    event.agent,
+                    event.type,
+                    event.ts,
+                    json.dumps(event.payload),
+                ),
+            )
+        return cursor.rowcount == 1
+
     def query(
         self,
         run_id: Optional[str] = None,

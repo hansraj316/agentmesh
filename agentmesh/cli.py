@@ -3,6 +3,7 @@
 Usage::
 
     agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow]
+    agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
 """
 
 import argparse
@@ -12,6 +13,7 @@ import time
 from typing import List, Optional
 
 from agentmesh.events import Event
+from agentmesh.ingest_gha import ingest
 from agentmesh.store import EventStore
 
 _FOLLOW_POLL_SECONDS = 0.5
@@ -49,6 +51,26 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep polling and print new events as they arrive (Ctrl-C to stop).",
     )
+
+    ingest_gha = subparsers.add_parser(
+        "ingest-gha",
+        help="Ingest recent GitHub Actions workflow runs as AMP events.",
+    )
+    ingest_gha.add_argument("owner", help="GitHub user or organization.")
+    ingest_gha.add_argument(
+        "--repo",
+        action="append",
+        dest="repos",
+        required=True,
+        metavar="REPO",
+        help="Repository to ingest (repeatable).",
+    )
+    ingest_gha.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="Workflow runs to fetch per repo (default: 30).",
+    )
     return parser
 
 
@@ -69,10 +91,20 @@ def _tail(args: argparse.Namespace) -> int:
         return 0
 
 
+def _ingest_gha(args: argparse.Namespace) -> int:
+    store = EventStore()
+    counts = ingest(args.owner, args.repos, store, limit_per_repo=args.limit)
+    for repo in args.repos:
+        print("%s/%s: %d new events" % (args.owner, repo, counts[repo]))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
         return _tail(args)
+    if args.command == "ingest-gha":
+        return _ingest_gha(args)
     return 2
 
 
