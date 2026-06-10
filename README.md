@@ -33,12 +33,18 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 └─────────────────────────────────────────┘
 ```
 
-## Quick Start (coming soon)
+## Quick Start
+
+The Python SDK, SQLite event store, and `agentmesh tail` CLI work today
+([AMP v0.1 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
 
 ```bash
-pip install agentmesh
-agentmesh up  # starts daemon + dashboard at localhost:7777
+git clone https://github.com/hansraj316/agentmesh && cd agentmesh
+pip install -e .  # Python 3.9+, no runtime dependencies
 ```
+
+Decorate any sync or async callable — `agent_start`, `agent_end` (with duration),
+and `agent_error` events are recorded automatically:
 
 ```python
 from agentmesh import mesh
@@ -46,19 +52,28 @@ from agentmesh import mesh
 @mesh.agent(name="researcher")
 async def researcher_agent(task: str) -> str:
     # your existing agent code — zero changes needed
-    result = await call_llm(task)
-    return result
+    return await call_llm(task)
 
-@mesh.agent(name="orchestrator")
-async def orchestrator(task: str):
-    results = await asyncio.gather(
-        researcher_agent(task),
-        writer_agent(task),
-    )
-    return combine(results)
+@mesh.agent(name="writer")
+def writer_agent(task: str) -> str:
+    return draft(task)
+
+# Group related calls under one run_id:
+with mesh.run("my-run-42"):
+    writer_agent("intro")
 ```
 
-Open `localhost:7777` → see your agents as a live graph. Nodes = agents. Edges = messages. Colors = status.
+Events are stored in SQLite at `~/.agentmesh/events.db` (override with the
+`AGENTMESH_DB` environment variable). Inspect them from the terminal:
+
+```bash
+agentmesh tail                 # last 20 events, one per line
+agentmesh tail --run my-run-42 # only one run
+agentmesh tail --agent writer -n 5
+agentmesh tail --follow        # stream new events live (Ctrl-C to stop)
+```
+
+The live dashboard (`agentmesh up` at `localhost:7777`) is on the roadmap below — not shipped yet.
 
 ## Framework Support (v0.1 target)
 
@@ -94,8 +109,8 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 ## Roadmap
 
 ### v0.1 — See Everything
-- [ ] AMP protocol spec
-- [ ] Python SDK (`@mesh.agent` decorator)
+- [x] AMP protocol spec ([docs/amp-spec.md](docs/amp-spec.md))
+- [x] Python SDK (`@mesh.agent` decorator + SQLite event store + `agentmesh tail` CLI)
 - [ ] AgentMesh Daemon (FastAPI + SQLite)
 - [ ] Real-time Dashboard (React + WebSocket)
 - [ ] Claude Agent SDK adapter
