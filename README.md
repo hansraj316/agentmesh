@@ -75,6 +75,18 @@ agentmesh tail --follow        # stream new events live (Ctrl-C to stop)
 
 The live dashboard (`agentmesh up` at `localhost:7777`) is on the roadmap below — not shipped yet.
 
+## Observe your GitHub Actions fleet
+
+Treat a repo fleet as your first mesh: each workflow run becomes an agent run
+(`agent_start`, then `agent_end` or `agent_error`) with deterministic event ids,
+so re-ingesting is idempotent. Set `GITHUB_TOKEN` for private repos or higher
+rate limits.
+
+```bash
+agentmesh ingest-gha hansraj316 --repo agentmesh --repo mission-control-openclaw --limit 50
+agentmesh tail --agent agentmesh/daily-ci -n 10
+```
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
