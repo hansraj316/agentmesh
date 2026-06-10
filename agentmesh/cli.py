@@ -4,14 +4,17 @@ Usage::
 
     agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow]
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
+    agentmesh board [--since ISO] [--html PATH] [--out PATH]
 """
 
 import argparse
 import json
 import sys
 import time
+from pathlib import Path
 from typing import List, Optional
 
+from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.store import EventStore
@@ -71,6 +74,30 @@ def _build_parser() -> argparse.ArgumentParser:
         default=30,
         help="Workflow runs to fetch per repo (default: 30).",
     )
+
+    board = subparsers.add_parser(
+        "board",
+        help="Render a fleet status dashboard from stored events.",
+    )
+    board.add_argument(
+        "--since",
+        default=None,
+        help="Only events at or after this ISO-8601 UTC timestamp.",
+    )
+    board.add_argument(
+        "--html",
+        default=None,
+        dest="html_path",
+        metavar="PATH",
+        help="Also write the dashboard as a self-contained HTML file.",
+    )
+    board.add_argument(
+        "--out",
+        default=None,
+        dest="out_path",
+        metavar="PATH",
+        help="Write the markdown dashboard to a file instead of stdout.",
+    )
     return parser
 
 
@@ -99,12 +126,29 @@ def _ingest_gha(args: argparse.Namespace) -> int:
     return 0
 
 
+def _board(args: argparse.Namespace) -> int:
+    store = EventStore()
+    summaries = agent_summaries(store, since=args.since)
+    markdown = render_markdown(summaries)
+    if args.out_path:
+        Path(args.out_path).write_text(markdown + "\n", encoding="utf-8")
+        print("wrote %s" % args.out_path)
+    else:
+        print(markdown)
+    if args.html_path:
+        Path(args.html_path).write_text(render_html(summaries), encoding="utf-8")
+        print("wrote %s" % args.html_path)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
         return _tail(args)
     if args.command == "ingest-gha":
         return _ingest_gha(args)
+    if args.command == "board":
+        return _board(args)
     return 2
 
 

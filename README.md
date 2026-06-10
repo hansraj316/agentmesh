@@ -87,6 +87,25 @@ agentmesh ingest-gha hansraj316 --repo agentmesh --repo mission-control-openclaw
 agentmesh tail --agent agentmesh/daily-ci -n 10
 ```
 
+Then render the fleet as a status board — one row per agent with its current
+status, failure streak, and average duration:
+
+```bash
+agentmesh board
+```
+
+```
+| Agent | Status | Last event | Age | Runs | Errors | Streak | Avg duration |
+|-------|--------|------------|-----|------|--------|--------|--------------|
+| agentmesh/daily-ci | 🟢 ok | agent_end | 2h | 12 | 1 | 0 | 41.3s |
+| mission-control-openclaw/deploy | 🔴 failed | agent_error | 3m | 8 | 3 | 2 | 58.0s |
+| mission-control-openclaw/nightly | 🔵 running | agent_start | 45s | 9 | 0 | 0 | 4m 12s |
+```
+
+`--since 2026-06-10T00:00:00+00:00` limits the window, `--out board.md` writes
+the markdown to a file, and `--html board.html` also writes a self-contained
+HTML dashboard (inline CSS, no JavaScript) you can open in any browser.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
