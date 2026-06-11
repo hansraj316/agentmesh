@@ -9,6 +9,8 @@ Usage::
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
     agentmesh import-jsonl PATH [--db PATH]
     agentmesh serve [--port N] [--db PATH] [--rules PATH]
+    agentmesh stats [--db PATH]
+    agentmesh prune --older-than 30d [--db PATH] [--dry-run]
 """
 
 import argparse
@@ -29,11 +31,26 @@ from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
+from agentmesh.maintenance import prune_events, render_stats, store_stats
 from agentmesh.server import serve
 from agentmesh.store import EventStore
 from agentmesh.trace import build_trace, render_tree
 
 _FOLLOW_POLL_SECONDS = 0.5
+
+
+def _parse_older_than(value: str) -> int:
+    """Parse an age cutoff in days: "30d" or a bare integer like "30"."""
+    text = value.strip().lower()
+    if text.endswith("d"):
+        text = text[:-1]
+    try:
+        days = int(text)
+    except ValueError:
+        raise ValueError('expected a day count like "30d" or "30", got %r' % value)
+    if days < 0:
+        raise ValueError("day count must not be negative, got %r" % value)
+    return days
 
 
 def format_event(event: Event) -> str:
@@ -189,6 +206,42 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Alert rules file for /api/alerts "
         "(default: $AGENTMESH_ALERTS or ~/.agentmesh/alerts.json).",
     )
+
+    stats_cmd = subparsers.add_parser(
+        "stats",
+        help="Print event store statistics (counts, agents, runs, ts range, db size).",
+    )
+    stats_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    prune_cmd = subparsers.add_parser(
+        "prune",
+        help="Delete events older than N days (whole runs only), then VACUUM.",
+    )
+    prune_cmd.add_argument(
+        "--older-than",
+        required=True,
+        dest="older_than",
+        type=_parse_older_than,
+        metavar="DAYS",
+        help='Age cutoff in days, e.g. "30d" or "30".',
+    )
+    prune_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+    prune_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Only report what would be deleted; change nothing.",
+    )
     return parser
 
 
@@ -284,6 +337,25 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stats(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    print(render_stats(store_stats(store)))
+    return 0
+
+
+def _prune(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    result = prune_events(store, args.older_than, dry_run=args.dry_run)
+    if args.dry_run:
+        print(
+            "dry run: would delete %d event(s), %d would remain"
+            % (result["deleted"], result["remaining"])
+        )
+    else:
+        print("deleted %d event(s), %d remaining" % (result["deleted"], result["remaining"]))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -300,6 +372,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _import_jsonl(args)
     if args.command == "serve":
         return _serve(args)
+    if args.command == "stats":
+        return _stats(args)
+    if args.command == "prune":
+        return _prune(args)
     return 2
 
 

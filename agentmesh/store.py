@@ -5,7 +5,7 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from agentmesh.events import Event
 
@@ -25,6 +25,8 @@ CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
 CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 """
+
+_RUNS_ENDED_BEFORE = "SELECT run_id FROM events GROUP BY run_id HAVING MAX(ts) < ?"
 
 
 def default_db_path() -> Path:
@@ -155,6 +157,76 @@ class EventStore:
         with self._connect() as conn:
             row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
         return int(row[0])
+
+    def count_events(self) -> int:
+        """Total number of stored events."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM events").fetchone()
+        return int(row[0])
+
+    def count_by_type(self) -> Dict[str, int]:
+        """Event counts keyed by event type."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT type, COUNT(*) FROM events GROUP BY type").fetchall()
+        return {row[0]: int(row[1]) for row in rows}
+
+    def count_distinct_agents(self) -> int:
+        """Number of distinct agents in the store."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(DISTINCT agent) FROM events").fetchone()
+        return int(row[0])
+
+    def count_distinct_runs(self) -> int:
+        """Number of distinct run_ids in the store."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(DISTINCT run_id) FROM events").fetchone()
+        return int(row[0])
+
+    def ts_range(self) -> Optional[Tuple[str, str]]:
+        """(oldest ts, newest ts) of stored events, or None if the store is empty."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT MIN(ts), MAX(ts) FROM events").fetchone()
+        if row[0] is None:
+            return None
+        return (row[0], row[1])
+
+    def count_events_in_runs_ended_before(self, cutoff: str) -> int:
+        """How many events ``delete_runs_ended_before(cutoff)`` would delete."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE run_id IN (%s)" % _RUNS_ENDED_BEFORE,
+                (cutoff,),
+            ).fetchone()
+        return int(row[0])
+
+    def delete_runs_ended_before(self, cutoff: str) -> int:
+        """Delete all events of runs whose newest event ts is before ``cutoff``.
+
+        Whole runs only: a run with any event at or after ``cutoff`` is left
+        intact. ``cutoff`` is an ISO-8601 UTC string compared against the
+        event ``ts``. Returns the number of deleted events. Used by
+        ``agentmesh.maintenance.prune_events``.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM events WHERE run_id IN (%s)" % _RUNS_ENDED_BEFORE,
+                (cutoff,),
+            )
+        return cursor.rowcount
+
+    def vacuum(self) -> None:
+        """Rebuild the database file to reclaim space freed by deletions."""
+        with self._connect() as conn:
+            conn.execute("VACUUM")
+
+    def db_size_bytes(self) -> Optional[int]:
+        """Size of the database file in bytes, or None if it is not a regular file."""
+        try:
+            if not self.path.is_file():
+                return None
+            return self.path.stat().st_size
+        except OSError:
+            return None
 
     @staticmethod
     def _row_to_event(row: Tuple) -> Event:
