@@ -73,7 +73,7 @@ agentmesh tail --agent writer -n 5
 agentmesh tail --follow        # stream new events live (Ctrl-C to stop)
 ```
 
-The live dashboard (`agentmesh up` at `localhost:7777`) is on the roadmap below — not shipped yet.
+For a live browser view, see [`agentmesh serve`](#serve-the-live-board) below.
 
 ## Observe your GitHub Actions fleet
 
@@ -170,6 +170,37 @@ agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50 && agentmesh alerts 
 
 `--db PATH` points at a different event database, as with `trace`.
 
+## Serve the live board
+
+`agentmesh serve` turns the fleet workflow into a live dashboard: it serves
+the HTML board plus a read-only JSON API from the event store, using only the
+Python standard library (no daemon dependencies).
+
+```bash
+agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50
+agentmesh serve                 # agentmesh board at http://127.0.0.1:7777/
+```
+
+Open `http://127.0.0.1:7777/` in a browser — the board page auto-refreshes
+every 5 seconds, so new events show up as they are ingested. The server binds
+to **127.0.0.1 only** (localhost) by design: the event store can contain
+private repo names and error details, so remote exposure is opt-in via your
+own reverse proxy. `--port N` changes the port, `--db PATH` and
+`--rules PATH` override the event database and alert rules file, and Ctrl-C
+stops it cleanly.
+
+| Route | Returns |
+|-------|---------|
+| `/` | HTML board (auto-refreshes every 5s) |
+| `/api/agents` | JSON list of agent summaries (one per agent) |
+| `/api/runs/<run_id>` | JSON span tree of one run (404 + JSON error if unknown) |
+| `/api/alerts` | JSON webhook payloads for fired alert rules (`[]` with no rules) |
+
+```bash
+curl -s http://127.0.0.1:7777/api/agents | python3 -m json.tool
+curl -s http://127.0.0.1:7777/api/runs/my-run-42 | python3 -m json.tool
+```
+
 ## TypeScript SDK (experimental)
 
 [`sdk-ts/`](sdk-ts/) is a dependency-free TypeScript mirror of the Python SDK:
@@ -235,7 +266,7 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 ### v0.1 — See Everything
 - [x] AMP protocol spec ([docs/amp-spec.md](docs/amp-spec.md))
 - [x] Python SDK (`@mesh.agent` decorator + SQLite event store + `agentmesh tail` CLI)
-- [ ] AgentMesh Daemon (FastAPI + SQLite)
+- [x] Serve daemon (`agentmesh serve` — live board + read-only JSON API, stdlib-only)
 - [ ] Real-time Dashboard (React + WebSocket)
 - [ ] Claude Agent SDK adapter
 - [ ] LangGraph adapter
