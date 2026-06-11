@@ -5,6 +5,7 @@ Usage::
     agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow]
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
     agentmesh board [--since ISO] [--html PATH] [--out PATH]
+    agentmesh costs [--by run|agent|model] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
@@ -29,6 +30,7 @@ from agentmesh.alerts import (
     to_webhook_payloads,
 )
 from agentmesh.board import agent_summaries, render_html, render_markdown
+from agentmesh.costs import GROUP_BY_CHOICES, render_costs, usage_summary
 from agentmesh.diff import diff_traces, render_diff
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
@@ -130,6 +132,29 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="out_path",
         metavar="PATH",
         help="Write the markdown dashboard to a file instead of stdout.",
+    )
+
+    costs_cmd = subparsers.add_parser(
+        "costs",
+        help="Aggregate token & cost usage from stored events.",
+    )
+    costs_cmd.add_argument(
+        "--by",
+        default="run",
+        choices=GROUP_BY_CHOICES,
+        dest="group_by",
+        help="Group usage by run, agent, or model (default: run).",
+    )
+    costs_cmd.add_argument(
+        "--since",
+        default=None,
+        help="Only events at or after this ISO-8601 UTC timestamp.",
+    )
+    costs_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
     )
 
     trace = subparsers.add_parser(
@@ -307,6 +332,12 @@ def _board(args: argparse.Namespace) -> int:
     return 0
 
 
+def _costs(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    print(render_costs(usage_summary(store, group_by=args.group_by, since=args.since)))
+    return 0
+
+
 def _trace(args: argparse.Namespace) -> int:
     store = EventStore(args.db) if args.db else EventStore()
     try:
@@ -399,6 +430,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _ingest_gha(args)
     if args.command == "board":
         return _board(args)
+    if args.command == "costs":
+        return _costs(args)
     if args.command == "trace":
         return _trace(args)
     if args.command == "diff":

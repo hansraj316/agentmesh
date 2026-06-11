@@ -36,7 +36,7 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 ## Quick Start
 
 The Python SDK, SQLite event store, and `agentmesh tail` CLI work today
-([AMP v0.1 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
+([AMP v0.3 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
 
 ```bash
 git clone https://github.com/hansraj316/agentmesh && cd agentmesh
@@ -128,6 +128,53 @@ run my-run-42 — 3 spans, 1 failed, total 4.2s
 running. v0.1 events without span ids still work — they render as a flat
 tree, paired by agent and event order. `--db PATH` points at a different
 event database.
+
+## Track tokens & cost
+
+Call `mesh.record_usage(...)` anywhere inside a decorated agent (sync or
+async) to account tokens and spend to the current span — the accumulated
+totals are merged into the `agent_end` payload as the optional
+[AMP v0.3](docs/amp-spec.md) usage fields (`input_tokens`, `output_tokens`,
+`cost_usd`, `model`). Multiple calls within one invocation sum the numbers;
+the last `model` wins:
+
+```python
+from agentmesh import mesh
+
+@mesh.agent(name="researcher")
+def researcher_agent(task: str) -> str:
+    response = call_llm(task)
+    mesh.record_usage(
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        cost_usd=response.usage.cost_usd,
+        model="claude-sonnet-4",
+    )
+    return response.text
+```
+
+Then roll the spend up by run, agent, or model:
+
+```bash
+agentmesh costs              # grouped by run (default)
+agentmesh costs --by agent
+agentmesh costs --by model
+```
+
+```
+| Model | Input tokens | Output tokens | Cost (USD) | Events |
+|-------|--------------|---------------|------------|--------|
+| claude-sonnet-4 | 48,200 | 9,150 | $0.3120 | 12 |
+| claude-haiku-4 | 102,400 | 21,300 | $0.0980 | 31 |
+| **total** | 150,600 | 30,450 | $0.4100 | 43 |
+```
+
+Rows are sorted by cost (highest first); `tool_call` events carrying usage
+fields count too. `--since ISO` limits the window and `--db PATH` points at
+a different event database. With usage data present, `agentmesh board` grows
+a per-agent Cost column, and `agentmesh trace` annotates spans with their
+usage, e.g. `researcher ✓ 2.0s [1.2k tok, $0.0034]` — stores without usage
+data render exactly as before.
 
 ## Compare runs
 
@@ -329,7 +376,7 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 
 ### v0.3 — Fix Everything
 - [ ] Diff view (compare two runs)
-- [ ] Cost tracking per agent
+- [x] Cost tracking per agent (`mesh.record_usage` + `agentmesh costs` — AMP v0.3 usage fields)
 - [ ] Circuit breakers (auto-stop runaway agents)
 - [x] Alert rules (`agentmesh alerts` — silence + failure-streak rules, webhook output)
 

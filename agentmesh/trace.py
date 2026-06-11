@@ -32,6 +32,9 @@ class Span:
     duration_seconds: Optional[float] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
     children: List["Span"] = field(default_factory=list)
 
 
@@ -81,6 +84,11 @@ def build_trace(store: EventStore, run_id: str) -> Trace:
             span = _match_open_span(event, by_span_id, open_v01)
             if span is not None:
                 _close_span(span, event)
+        elif event.type == "tool_call":
+            span_id = _payload_str(event, "span_id")
+            span = by_span_id.get(span_id) if span_id is not None else None
+            if span is not None:
+                _add_usage(span, event)
 
     roots: List[Span] = []
     for span in spans:
@@ -121,6 +129,28 @@ def _close_span(span: Span, event: Event) -> None:
     if event.type == "agent_error":
         span.error = str(event.payload.get("error", "")) or None
         span.error_type = str(event.payload.get("error_type", "")) or None
+    else:
+        _add_usage(span, event)
+
+
+def _add_usage(span: Span, event: Event) -> None:
+    """Accumulate the event's AMP v0.3 usage payload fields onto the span."""
+    input_tokens = _payload_int(event, "input_tokens")
+    if input_tokens is not None:
+        span.input_tokens = (span.input_tokens or 0) + input_tokens
+    output_tokens = _payload_int(event, "output_tokens")
+    if output_tokens is not None:
+        span.output_tokens = (span.output_tokens or 0) + output_tokens
+    cost = event.payload.get("cost_usd")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        span.cost_usd = (span.cost_usd or 0.0) + float(cost)
+
+
+def _payload_int(event: Event, key: str) -> Optional[int]:
+    value = event.payload.get(key)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _duration_seconds(span: Span, end: Event) -> float:
@@ -167,6 +197,9 @@ def _render_spans(spans: List[Span], prefix: str, lines: List[str], now: datetim
 
 def _format_span(span: Span, now: datetime) -> str:
     text = "%s %s %s" % (span.agent, _STATUS_MARK[span.status], _span_duration_text(span, now))
+    usage = _span_usage_text(span)
+    if usage:
+        text += " " + usage
     if span.status == STATUS_FAILED and (span.error_type or span.error):
         first_line = span.error.splitlines()[0] if span.error else ""
         if span.error_type:
@@ -175,6 +208,26 @@ def _format_span(span: Span, now: datetime) -> str:
             detail = first_line
         text += " — " + detail
     return text
+
+
+def _span_usage_text(span: Span) -> str:
+    """Compact usage suffix like "[1.2k tok, $0.0034]"; "" without usage."""
+    parts = []
+    if span.input_tokens is not None or span.output_tokens is not None:
+        parts.append(
+            "%s tok" % _format_tokens((span.input_tokens or 0) + (span.output_tokens or 0))
+        )
+    if span.cost_usd is not None:
+        parts.append("$%.4f" % span.cost_usd)
+    return "[%s]" % ", ".join(parts) if parts else ""
+
+
+def _format_tokens(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        return "%.1fM" % (tokens / 1_000_000.0)
+    if tokens >= 1000:
+        return "%.1fk" % (tokens / 1000.0)
+    return "%d" % tokens
 
 
 def _span_duration_text(span: Span, now: datetime) -> str:

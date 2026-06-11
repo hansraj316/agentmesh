@@ -1,10 +1,12 @@
-"""AgentMesh Python SDK: ``@mesh.agent`` decorator and ``mesh.run`` grouping."""
+"""AgentMesh Python SDK: ``@mesh.agent`` decorator, ``mesh.run`` grouping,
+and ``mesh.record_usage`` token/cost accounting."""
 
 import contextvars
 import functools
 import inspect
 import time
 import uuid
+import warnings
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, Optional, TypeVar
 
@@ -19,6 +21,10 @@ _current_run_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 _current_span_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "agentmesh_span_id", default=None
+)
+
+_current_usage: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "agentmesh_usage", default=None
 )
 
 
@@ -63,6 +69,36 @@ class Mesh:
     def current_run_id(self) -> Optional[str]:
         return _current_run_id.get()
 
+    def record_usage(
+        self,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cost_usd: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        """Accumulate token/cost usage onto the current ``@mesh.agent`` span.
+
+        The accumulated fields are merged into the span's ``agent_end``
+        payload (AMP v0.3). Multiple calls within one span sum the token and
+        cost numbers; for ``model`` the last non-None value wins. Outside any
+        span this is a no-op that emits a warning.
+        """
+        usage = _current_usage.get()
+        if usage is None:
+            warnings.warn(
+                "mesh.record_usage() called outside any @mesh.agent span; usage dropped",
+                stacklevel=2,
+            )
+            return
+        if input_tokens is not None:
+            usage["input_tokens"] = usage.get("input_tokens", 0) + input_tokens
+        if output_tokens is not None:
+            usage["output_tokens"] = usage.get("output_tokens", 0) + output_tokens
+        if cost_usd is not None:
+            usage["cost_usd"] = usage.get("cost_usd", 0.0) + cost_usd
+        if model is not None:
+            usage["model"] = model
+
     def agent(self, name: str) -> Callable[[F], F]:
         """Instrument a sync or async callable as a named agent.
 
@@ -72,7 +108,9 @@ class Mesh:
 
         Each call gets a fresh ``span_id``; nested decorated calls record
         the enclosing call's span as ``parent_span_id`` (AMP v0.2), so a
-        trace tree can be rebuilt with ``agentmesh trace RUN_ID``.
+        trace tree can be rebuilt with ``agentmesh trace RUN_ID``. Usage
+        recorded via ``mesh.record_usage`` inside the call is merged into
+        the ``agent_end`` payload (AMP v0.3).
         """
 
         def decorator(fn: F) -> F:
@@ -84,11 +122,14 @@ class Mesh:
                 self._emit(run_id, name, "agent_start", payload)
                 return time.perf_counter()
 
-            def _end(run_id: str, started: float, span: Dict[str, str]) -> None:
+            def _end(
+                run_id: str, started: float, span: Dict[str, str], usage: Dict[str, Any]
+            ) -> None:
                 payload: Dict[str, Any] = {
                     "function": function_name,
                     "duration_ms": (time.perf_counter() - started) * 1000.0,
                 }
+                payload.update(usage)
                 payload.update(span)
                 self._emit(run_id, name, "agent_end", payload)
 
@@ -110,7 +151,9 @@ class Mesh:
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                     run_id = _current_run_id.get() or str(uuid.uuid4())
                     span = _new_span_fields()
+                    usage: Dict[str, Any] = {}
                     token = _current_span_id.set(span["span_id"])
+                    usage_token = _current_usage.set(usage)
                     try:
                         started = _start(run_id, span)
                         try:
@@ -118,9 +161,10 @@ class Mesh:
                         except BaseException as exc:
                             _error(run_id, started, exc, span)
                             raise
-                        _end(run_id, started, span)
+                        _end(run_id, started, span, usage)
                         return result
                     finally:
+                        _current_usage.reset(usage_token)
                         _current_span_id.reset(token)
 
                 return async_wrapper  # type: ignore[return-value]
@@ -129,7 +173,9 @@ class Mesh:
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run_id = _current_run_id.get() or str(uuid.uuid4())
                 span = _new_span_fields()
+                usage: Dict[str, Any] = {}
                 token = _current_span_id.set(span["span_id"])
+                usage_token = _current_usage.set(usage)
                 try:
                     started = _start(run_id, span)
                     try:
@@ -137,9 +183,10 @@ class Mesh:
                     except BaseException as exc:
                         _error(run_id, started, exc, span)
                         raise
-                    _end(run_id, started, span)
+                    _end(run_id, started, span, usage)
                     return result
                 finally:
+                    _current_usage.reset(usage_token)
                     _current_span_id.reset(token)
 
             return sync_wrapper  # type: ignore[return-value]

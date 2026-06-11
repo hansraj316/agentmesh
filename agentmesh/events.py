@@ -1,4 +1,4 @@
-"""AMP v0.1 event model. See docs/amp-spec.md."""
+"""AMP v0.3 event model. See docs/amp-spec.md."""
 
 import uuid
 from dataclasses import dataclass, field
@@ -15,6 +15,9 @@ EVENT_TYPES = frozenset(
     }
 )
 
+# Event types that may carry the optional AMP v0.3 usage payload fields.
+USAGE_EVENT_TYPES = frozenset({"agent_end", "tool_call"})
+
 
 def utc_now_iso() -> str:
     """Current time as an ISO-8601 UTC string."""
@@ -28,9 +31,30 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
 
 
+def _validate_usage(payload: Dict[str, Any]) -> None:
+    """Validate the optional AMP v0.3 usage payload keys, if present.
+
+    Absent keys are always fine (v0.1/v0.2 events validate unchanged); a
+    present key with the wrong type or a negative value raises ValueError.
+    """
+    for name in ("input_tokens", "output_tokens"):
+        if name in payload:
+            value = payload[name]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("%s must be a non-negative integer, got %r" % (name, value))
+    if "cost_usd" in payload:
+        value = payload["cost_usd"]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+            raise ValueError("cost_usd must be a non-negative number, got %r" % (value,))
+    if "model" in payload:
+        value = payload["model"]
+        if not isinstance(value, str) or not value:
+            raise ValueError("model must be a non-empty string, got %r" % (value,))
+
+
 @dataclass(frozen=True)
 class Event:
-    """A single AMP v0.1 event."""
+    """A single AMP v0.3 event."""
 
     event_id: str
     run_id: str
@@ -43,7 +67,7 @@ class Event:
         self.validate()
 
     def validate(self) -> None:
-        """Raise ValueError if this event violates the AMP v0.1 spec."""
+        """Raise ValueError if this event violates the AMP v0.3 spec."""
         for name in ("event_id", "run_id", "agent"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
@@ -60,6 +84,8 @@ class Event:
             raise ValueError("ts must be timezone-aware UTC: %r" % (self.ts,))
         if not isinstance(self.payload, dict):
             raise ValueError("payload must be a dict, got %r" % (self.payload,))
+        if self.type in USAGE_EVENT_TYPES:
+            _validate_usage(self.payload)
 
     @classmethod
     def new(
