@@ -230,6 +230,23 @@ agentmesh trace my-run-42   # TS spans render in the same trace tree
 `--db PATH` overrides the target database. To develop the SDK:
 `cd sdk-ts && npm install && npx tsc --noEmit && npx vitest run`.
 
+## Maintenance
+
+Long-running event stores grow forever by default; `stats` and `prune` keep
+them healthy:
+
+```bash
+agentmesh stats                            # counts per type, agents, runs, ts range, db size
+agentmesh prune --older-than 30d           # delete events older than 30 days, then VACUUM
+agentmesh prune --older-than 30d --dry-run # report what would be deleted, change nothing
+```
+
+Pruning never splits a run: if **any** event of a run is newer than the
+cutoff, **all** events of that run are kept — only runs whose every event is
+older than the cutoff are deleted, so traces always stay complete.
+`--older-than` accepts `30d` or a bare day count like `30`, and `--db PATH`
+overrides the event database on both commands.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
