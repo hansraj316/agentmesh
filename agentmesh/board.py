@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
-from agentmesh.events import Event, _parse_ts
+from agentmesh.events import USAGE_EVENT_TYPES, Event, _parse_ts
 from agentmesh.store import EventStore
 
 STATUS_OK = "ok"
@@ -25,6 +25,11 @@ _TERMINAL_TYPES = frozenset({"agent_end", "agent_error"})
 _MARKDOWN_HEADER = [
     "| Agent | Status | Last event | Age | Runs | Errors | Streak | Avg duration |",
     "|-------|--------|------------|-----|------|--------|--------|--------------|",
+]
+
+_MARKDOWN_HEADER_WITH_COST = [
+    "| Agent | Status | Last event | Age | Runs | Errors | Streak | Avg duration | Cost |",
+    "|-------|--------|------------|-----|------|--------|--------|--------------|------|",
 ]
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
@@ -48,13 +53,17 @@ tr.idle { background: #fafafa; }
 <body>
 <h1>AgentMesh board</h1>
 <table>
-<tr><th>Agent</th><th>Status</th><th>Last event</th><th>Age</th>
-<th>Runs</th><th>Errors</th><th>Streak</th><th>Avg duration</th></tr>
+%s
 %s
 </table>
 </body>
 </html>
 """
+
+_HTML_HEADER = (
+    "<tr><th>Agent</th><th>Status</th><th>Last event</th><th>Age</th>\n"
+    "<th>Runs</th><th>Errors</th><th>Streak</th><th>Avg duration</th>%s</tr>"
+)
 
 
 @dataclass
@@ -69,6 +78,7 @@ class AgentSummary:
     errors: int
     streak: int
     avg_duration_seconds: Optional[float]
+    cost_usd: Optional[float] = None  # total spend; None when no event carried cost_usd
 
 
 def agent_summaries(
@@ -130,7 +140,20 @@ def _summarize(agent: str, events: List[Event]) -> AgentSummary:
         errors=errors,
         streak=streak,
         avg_duration_seconds=sum(durations) / len(durations) if durations else None,
+        cost_usd=_total_cost(events),
     )
+
+
+def _total_cost(events: List[Event]) -> Optional[float]:
+    """Total ``cost_usd`` across usage-carrying events; None when none carry it."""
+    costs: List[float] = []
+    for event in events:
+        if event.type not in USAGE_EVENT_TYPES:
+            continue
+        cost = event.payload.get("cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            costs.append(float(cost))
+    return sum(costs) if costs else None
 
 
 def _status(last: Event, last_run_end: Optional[Event], terminals: List[Event]) -> str:
@@ -175,26 +198,38 @@ def _format_duration(seconds: Optional[float]) -> str:
     return "%dm %ds" % (seconds // 60, seconds % 60)
 
 
+def _format_cost(cost_usd: Optional[float]) -> str:
+    if cost_usd is None:
+        return "—"
+    return "$%.4f" % cost_usd
+
+
+def _show_cost(summaries: List[AgentSummary]) -> bool:
+    """The Cost column appears only when any agent has usage data."""
+    return any(summary.cost_usd is not None for summary in summaries)
+
+
 def render_markdown(summaries: List[AgentSummary], now: Optional[datetime] = None) -> str:
     """Render summaries as a markdown table; ``now`` is injectable for tests."""
     if now is None:
         now = datetime.now(timezone.utc)
-    lines = list(_MARKDOWN_HEADER)
+    show_cost = _show_cost(summaries)
+    lines = list(_MARKDOWN_HEADER_WITH_COST if show_cost else _MARKDOWN_HEADER)
     for summary in summaries:
-        lines.append(
-            "| %s | %s %s | %s | %s | %d | %d | %d | %s |"
-            % (
-                summary.agent,
-                _STATUS_EMOJI[summary.status],
-                summary.status,
-                summary.last_event_type,
-                _humanize_age(summary.last_ts, now),
-                summary.runs,
-                summary.errors,
-                summary.streak,
-                _format_duration(summary.avg_duration_seconds),
-            )
+        line = "| %s | %s %s | %s | %s | %d | %d | %d | %s |" % (
+            summary.agent,
+            _STATUS_EMOJI[summary.status],
+            summary.status,
+            summary.last_event_type,
+            _humanize_age(summary.last_ts, now),
+            summary.runs,
+            summary.errors,
+            summary.streak,
+            _format_duration(summary.avg_duration_seconds),
         )
+        if show_cost:
+            line += " %s |" % _format_cost(summary.cost_usd)
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -202,11 +237,12 @@ def render_html(summaries: List[AgentSummary], now: Optional[datetime] = None) -
     """Render summaries as a minimal self-contained HTML page (no JS, no assets)."""
     if now is None:
         now = datetime.now(timezone.utc)
+    show_cost = _show_cost(summaries)
     rows = []
     for summary in summaries:
-        rows.append(
+        row = (
             '<tr class="%s"><td>%s</td><td>%s %s</td><td>%s</td><td>%s</td>'
-            "<td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>"
+            "<td>%d</td><td>%d</td><td>%d</td><td>%s</td>"
             % (
                 html.escape(summary.status, quote=True),
                 html.escape(summary.agent),
@@ -220,4 +256,8 @@ def render_html(summaries: List[AgentSummary], now: Optional[datetime] = None) -
                 html.escape(_format_duration(summary.avg_duration_seconds)),
             )
         )
-    return _HTML_TEMPLATE % "\n".join(rows)
+        if show_cost:
+            row += "<td>%s</td>" % html.escape(_format_cost(summary.cost_usd))
+        rows.append(row + "</tr>")
+    header = _HTML_HEADER % ("<th>Cost</th>" if show_cost else "")
+    return _HTML_TEMPLATE % (header, "\n".join(rows))
