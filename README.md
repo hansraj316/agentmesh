@@ -129,6 +129,38 @@ running. v0.1 events without span ids still work — they render as a flat
 tree, paired by agent and event order. `--db PATH` points at a different
 event database.
 
+## Compare runs
+
+Did yesterday's deploy make the pipeline slower? Diff two runs of the same
+workflow to catch regressions:
+
+```bash
+agentmesh diff run-baseline run-after-deploy
+```
+
+```
+# Run diff: run-baseline → run-after-deploy
+
+run-baseline: 3 spans, 0 failed, total 4.2s | run-after-deploy: 3 spans, 1 failed, total 6.8s | wall-clock Δ +2.6s
+
+| Agent path | run-baseline | run-after-deploy | Δ | %Δ | Status |  |
+| --- | --- | --- | --- | --- | --- | --- |
+| orchestrator | 4.1s | 6.7s | +2.6s | +63.4% | ok → ok | ⚠️ |
+| orchestrator/researcher | 2.0s | 4.4s | +2.4s | +120.0% | ok → ok | ⚠️ |
+| orchestrator/writer | 1.3s | 1.9s | +0.6s | +46.2% | ok → failed | ⚠️ |
+```
+
+Spans are aligned by structural path (the root-relative chain of agent
+names); when the same agent runs twice under one parent, occurrences match
+in order. Each aligned pair shows both durations, the absolute and percent
+delta, and the status transition — rows that got slower beyond the
+threshold or flipped `ok → failed` are marked `⚠️`, rows that sped up or
+recovered are marked `✅`. Spans present in only one run get their own
+"Only in …" sections, and when nothing crosses the threshold the diff says
+so instead. `--threshold PCT` tunes what counts as significant (default
+20%), `--db PATH` points at a different event database, and the exit code
+is 0 whenever both runs exist — the diff is informational, not a gate.
+
 ## Alerting
 
 Declare alert rules in `~/.agentmesh/alerts.json` (override with the
