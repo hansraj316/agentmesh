@@ -7,6 +7,7 @@ Usage::
     agentmesh board [--since ISO] [--html PATH] [--out PATH] [--db PATH]
     agentmesh costs [--by run|agent|model] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
+    agentmesh export-otlp RUN_ID [--db PATH] [--out PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
     agentmesh import-jsonl PATH [--db PATH]
@@ -38,6 +39,7 @@ from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
 from agentmesh.maintenance import prune_events, render_stats, store_stats
+from agentmesh.otlp import export_otlp
 from agentmesh.server import serve
 from agentmesh.store import EventStore
 from agentmesh.trace import build_trace, render_tree
@@ -181,6 +183,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    export_otlp_cmd = subparsers.add_parser(
+        "export-otlp",
+        help="Export one run's span tree as OTLP/JSON (for Jaeger, Tempo, ...).",
+    )
+    export_otlp_cmd.add_argument("run_id", help="The run_id to export.")
+    export_otlp_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+    export_otlp_cmd.add_argument(
+        "--out",
+        default=None,
+        dest="out_path",
+        metavar="PATH",
+        help="Write the OTLP JSON document to a file instead of stdout.",
     )
 
     diff_cmd = subparsers.add_parser(
@@ -379,6 +400,22 @@ def _trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _export_otlp(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        document = export_otlp(store, args.run_id)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    text = json.dumps(document, indent=2)
+    if args.out_path:
+        Path(args.out_path).write_text(text + "\n", encoding="utf-8")
+        print("Wrote %s" % args.out_path)
+    else:
+        print(text)
+    return 0
+
+
 def _diff(args: argparse.Namespace) -> int:
     store = EventStore(args.db) if args.db else EventStore()
     traces = []
@@ -487,6 +524,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _costs(args)
     if args.command == "trace":
         return _trace(args)
+    if args.command == "export-otlp":
+        return _export_otlp(args)
     if args.command == "diff":
         return _diff(args)
     if args.command == "alerts":
