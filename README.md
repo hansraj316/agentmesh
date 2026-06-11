@@ -33,15 +33,39 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 └─────────────────────────────────────────┘
 ```
 
-## Quick Start
+## Try it in 30 seconds
 
-The Python SDK, SQLite event store, and `agentmesh tail` CLI work today
-([AMP v0.3 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
+No agents required — `agentmesh demo` seeds a realistic multi-agent dataset
+(a healthy pipeline run, a regressed run with a failing writer, a GitHub
+Actions run, and a silent agent) into `~/.agentmesh/demo.db`, writes a demo
+alert rules file next to it, and prints a guided tour:
 
 ```bash
 git clone https://github.com/hansraj316/agentmesh && cd agentmesh
 pip install -e .  # Python 3.9+, no runtime dependencies
+agentmesh demo
 ```
+
+Then follow the tour — every command points at the demo db via `--db`:
+
+```bash
+agentmesh board --db ~/.agentmesh/demo.db                              # fleet status, streaks, cost
+agentmesh tail --run demo-run-002 -n 20 --db ~/.agentmesh/demo.db      # raw events of the failing run
+agentmesh trace demo-run-002 --db ~/.agentmesh/demo.db                 # span tree: writer ✗ timed out
+agentmesh diff demo-run-001 demo-run-002 --db ~/.agentmesh/demo.db     # regression + ok → failed
+agentmesh costs --by agent --db ~/.agentmesh/demo.db                   # token & cost rollup
+agentmesh alerts --rules ~/.agentmesh/demo-alerts.json --db ~/.agentmesh/demo.db  # both demo rules fire
+agentmesh serve --db ~/.agentmesh/demo.db                              # live board on :7777
+```
+
+The demo db is separate from your real event store; rerun with
+`agentmesh demo --fresh` to reset it (seeding refuses to touch a non-empty
+db otherwise), or `--db PATH` to put it elsewhere.
+
+## Quick Start
+
+The Python SDK, SQLite event store, and `agentmesh tail` CLI work today
+([AMP v0.3 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
 
 Decorate any sync or async callable — `agent_start`, `agent_end` (with duration),
 and `agent_error` events are recorded automatically:

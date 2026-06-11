@@ -2,9 +2,9 @@
 
 Usage::
 
-    agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow]
+    agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow] [--db PATH]
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
-    agentmesh board [--since ISO] [--html PATH] [--out PATH]
+    agentmesh board [--since ISO] [--html PATH] [--out PATH] [--db PATH]
     agentmesh costs [--by run|agent|model] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
@@ -13,6 +13,7 @@ Usage::
     agentmesh serve [--port N] [--db PATH] [--rules PATH]
     agentmesh stats [--db PATH]
     agentmesh prune --older-than 30d [--db PATH] [--dry-run]
+    agentmesh demo [--db PATH] [--fresh]
 """
 
 import argparse
@@ -31,6 +32,7 @@ from agentmesh.alerts import (
 )
 from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.costs import GROUP_BY_CHOICES, render_costs, usage_summary
+from agentmesh.demo import DEMO_DB_PATH, DEMO_RULES_FILENAME, demo_tour, seed_demo, write_demo_rules
 from agentmesh.diff import diff_traces, render_diff
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
@@ -89,6 +91,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep polling and print new events as they arrive (Ctrl-C to stop).",
     )
+    tail.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
 
     ingest_gha = subparsers.add_parser(
         "ingest-gha",
@@ -132,6 +140,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="out_path",
         metavar="PATH",
         help="Write the markdown dashboard to a file instead of stdout.",
+    )
+    board.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
     )
 
     costs_cmd = subparsers.add_parser(
@@ -289,11 +303,27 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         help="Only report what would be deleted; change nothing.",
     )
+
+    demo = subparsers.add_parser(
+        "demo",
+        help="Seed a self-contained demo database and print a guided tour.",
+    )
+    demo.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Demo database path (default: ~/.agentmesh/demo.db).",
+    )
+    demo.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Delete an existing demo database and reseed from scratch.",
+    )
     return parser
 
 
 def _tail(args: argparse.Namespace) -> int:
-    store = EventStore()
+    store = EventStore(args.db) if args.db else EventStore()
     for event in store.query(run_id=args.run, agent=args.agent, limit=args.limit):
         print(format_event(event))
     if not args.follow:
@@ -318,7 +348,7 @@ def _ingest_gha(args: argparse.Namespace) -> int:
 
 
 def _board(args: argparse.Namespace) -> int:
-    store = EventStore()
+    store = EventStore(args.db) if args.db else EventStore()
     summaries = agent_summaries(store, since=args.since)
     markdown = render_markdown(summaries)
     if args.out_path:
@@ -422,6 +452,29 @@ def _prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _demo(args: argparse.Namespace) -> int:
+    db_path = Path(args.db) if args.db else DEMO_DB_PATH
+    if db_path.exists():
+        if args.fresh:
+            db_path.unlink()
+        elif EventStore(db_path).count_events() > 0:
+            print(
+                "error: %s already contains events; pass --fresh to delete and reseed" % db_path,
+                file=sys.stderr,
+            )
+            return 1
+    summary = seed_demo(EventStore(db_path))
+    rules_path = write_demo_rules(db_path.parent / DEMO_RULES_FILENAME)
+    print(
+        "Seeded %d events across %d runs and %d agents into %s"
+        % (summary["events"], summary["runs"], summary["agents"], db_path)
+    )
+    print("Demo alert rules written to %s" % rules_path)
+    print()
+    print(demo_tour(db_path))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -446,6 +499,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _stats(args)
     if args.command == "prune":
         return _prune(args)
+    if args.command == "demo":
+        return _demo(args)
     return 2
 
 
