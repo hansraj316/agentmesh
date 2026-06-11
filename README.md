@@ -170,6 +170,35 @@ agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50 && agentmesh alerts 
 
 `--db PATH` points at a different event database, as with `trace`.
 
+## TypeScript SDK (experimental)
+
+[`sdk-ts/`](sdk-ts/) is a dependency-free TypeScript mirror of the Python SDK:
+wrap any sync or async function with `mesh.agent(name, fn)` and it emits
+`agent_start`, `agent_end` (with `duration_seconds`), and `agent_error`
+(re-thrown) AMP v0.2 events, with span nesting propagated through async code
+via `AsyncLocalStorage`. Events are written as JSON Lines:
+
+```ts
+import { Mesh, JsonlFileSink } from "agentmesh-sdk";
+
+const mesh = new Mesh(new JsonlFileSink("events.jsonl"));
+
+const writer = mesh.agent("writer", async (task: string) => draft(task));
+
+await mesh.run("my-run-42", () => writer("intro"));
+```
+
+Then bridge the JSONL file into the Python event store — the import is
+idempotent (duplicate event ids are skipped), so it is safe to re-run:
+
+```bash
+agentmesh import-jsonl events.jsonl && agentmesh board
+agentmesh trace my-run-42   # TS spans render in the same trace tree
+```
+
+`--db PATH` overrides the target database. To develop the SDK:
+`cd sdk-ts && npm install && npx tsc --noEmit && npx vitest run`.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |

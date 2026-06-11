@@ -1,0 +1,16 @@
+{
+  "name": "agentmesh-sdk",
+  "version": "0.1.0",
+  "description": "AgentMesh TypeScript SDK — emit AMP v0.2 events from TypeScript agents.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}
