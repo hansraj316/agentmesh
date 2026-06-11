@@ -6,6 +6,7 @@ Usage::
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
     agentmesh board [--since ISO] [--html PATH] [--out PATH]
     agentmesh trace RUN_ID [--db PATH]
+    agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
     agentmesh import-jsonl PATH [--db PATH]
     agentmesh serve [--port N] [--db PATH] [--rules PATH]
@@ -28,6 +29,7 @@ from agentmesh.alerts import (
     to_webhook_payloads,
 )
 from agentmesh.board import agent_summaries, render_html, render_markdown
+from agentmesh.diff import diff_traces, render_diff
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
@@ -140,6 +142,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    diff_cmd = subparsers.add_parser(
+        "diff",
+        help="Compare two runs of the same workflow: durations, statuses, structure.",
+    )
+    diff_cmd.add_argument("run_a", help="The baseline run_id (A).")
+    diff_cmd.add_argument("run_b", help="The run_id to compare against the baseline (B).")
+    diff_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+    diff_cmd.add_argument(
+        "--threshold",
+        type=float,
+        default=20.0,
+        metavar="PCT",
+        help="Duration change (in percent) that counts as significant (default: 20).",
     )
 
     alerts = subparsers.add_parser(
@@ -296,6 +318,19 @@ def _trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _diff(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    traces = []
+    for run_id in (args.run_a, args.run_b):
+        try:
+            traces.append(build_trace(store, run_id))
+        except ValueError as exc:
+            print("error: %s" % exc, file=sys.stderr)
+            return 1
+    print(render_diff(diff_traces(traces[0], traces[1]), threshold_pct=args.threshold))
+    return 0
+
+
 def _alerts(args: argparse.Namespace) -> int:
     store = EventStore(args.db) if args.db else EventStore()
     try:
@@ -366,6 +401,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _board(args)
     if args.command == "trace":
         return _trace(args)
+    if args.command == "diff":
+        return _diff(args)
     if args.command == "alerts":
         return _alerts(args)
     if args.command == "import-jsonl":
