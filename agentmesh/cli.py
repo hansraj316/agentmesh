@@ -8,6 +8,7 @@ Usage::
     agentmesh trace RUN_ID [--db PATH]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
     agentmesh import-jsonl PATH [--db PATH]
+    agentmesh serve [--port N] [--db PATH] [--rules PATH]
 """
 
 import argparse
@@ -28,6 +29,7 @@ from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
+from agentmesh.server import serve
 from agentmesh.store import EventStore
 from agentmesh.trace import build_trace, render_tree
 
@@ -163,6 +165,30 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
     )
+
+    serve_cmd = subparsers.add_parser(
+        "serve",
+        help="Serve the live board and a read-only JSON API on localhost.",
+    )
+    serve_cmd.add_argument(
+        "--port",
+        type=int,
+        default=7777,
+        help="Port to listen on at 127.0.0.1 (default: 7777).",
+    )
+    serve_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+    serve_cmd.add_argument(
+        "--rules",
+        default=None,
+        metavar="PATH",
+        help="Alert rules file for /api/alerts "
+        "(default: $AGENTMESH_ALERTS or ~/.agentmesh/alerts.json).",
+    )
     return parser
 
 
@@ -249,6 +275,15 @@ def _import_jsonl(args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(args: argparse.Namespace) -> int:
+    print("agentmesh board at http://127.0.0.1:%d/" % args.port, flush=True)
+    try:
+        serve(args.db, args.port, rules_path=args.rules)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -263,6 +298,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _alerts(args)
     if args.command == "import-jsonl":
         return _import_jsonl(args)
+    if args.command == "serve":
+        return _serve(args)
     return 2
 
 
