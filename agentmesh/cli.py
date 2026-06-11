@@ -7,6 +7,7 @@ Usage::
     agentmesh board [--since ISO] [--html PATH] [--out PATH]
     agentmesh trace RUN_ID [--db PATH]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
+    agentmesh import-jsonl PATH [--db PATH]
 """
 
 import argparse
@@ -26,6 +27,7 @@ from agentmesh.alerts import (
 from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.events import Event
 from agentmesh.ingest_gha import ingest
+from agentmesh.jsonl import import_jsonl
 from agentmesh.store import EventStore
 from agentmesh.trace import build_trace, render_tree
 
@@ -149,6 +151,18 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="exit_code",
         help="Exit 1 if any alert fired (for CI/cron use).",
     )
+
+    import_jsonl_cmd = subparsers.add_parser(
+        "import-jsonl",
+        help="Import AMP events from a JSONL file (e.g. emitted by the TypeScript SDK).",
+    )
+    import_jsonl_cmd.add_argument("path", help="JSONL file with one AMP event per line.")
+    import_jsonl_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
     return parser
 
 
@@ -221,6 +235,20 @@ def _alerts(args: argparse.Namespace) -> int:
     return 1 if args.exit_code else 0
 
 
+def _import_jsonl(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        imported, skipped = import_jsonl(args.path, store)
+    except FileNotFoundError:
+        print("error: no such file: %s" % args.path, file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print("error: %s: %s" % (args.path, exc), file=sys.stderr)
+        return 1
+    print("imported %d event(s), skipped %d duplicate(s)" % (imported, skipped))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "tail":
@@ -233,6 +261,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _trace(args)
     if args.command == "alerts":
         return _alerts(args)
+    if args.command == "import-jsonl":
+        return _import_jsonl(args)
     return 2
 
 
