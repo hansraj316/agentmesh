@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from agentmesh.events import USAGE_EVENT_TYPES, Event, _parse_ts
+from agentmesh.latency import percentile
 from agentmesh.store import EventStore
 
 STATUS_OK = "ok"
@@ -22,15 +23,21 @@ _STATUS_EMOJI = {
 
 _TERMINAL_TYPES = frozenset({"agent_end", "agent_error"})
 
-_MARKDOWN_HEADER = [
-    "| Agent | Status | Last event | Age | Runs | Errors | Streak | Avg duration |",
-    "|-------|--------|------------|-----|------|--------|--------|--------------|",
-]
+_BASE_COLUMNS = ("Agent", "Status", "Last event", "Age", "Runs", "Errors", "Streak", "Avg duration")
 
-_MARKDOWN_HEADER_WITH_COST = [
-    "| Agent | Status | Last event | Age | Runs | Errors | Streak | Avg duration | Cost |",
-    "|-------|--------|------------|-----|------|--------|--------|--------------|------|",
-]
+
+def _markdown_header(show_cost: bool, include_p95: bool) -> List[str]:
+    """The two markdown header lines for the active optional columns."""
+    columns = list(_BASE_COLUMNS)
+    if include_p95:
+        columns.append("p95")
+    if show_cost:
+        columns.append("Cost")
+    return [
+        "| " + " | ".join(columns) + " |",
+        "|" + "|".join("-" * (len(column) + 2) for column in columns) + "|",
+    ]
+
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -79,6 +86,7 @@ class AgentSummary:
     streak: int
     avg_duration_seconds: Optional[float]
     cost_usd: Optional[float] = None  # total spend; None when no event carried cost_usd
+    p95_duration_seconds: Optional[float] = None  # None without successful runs
 
 
 def agent_summaries(
@@ -141,6 +149,7 @@ def _summarize(agent: str, events: List[Event]) -> AgentSummary:
         streak=streak,
         avg_duration_seconds=sum(durations) / len(durations) if durations else None,
         cost_usd=_total_cost(events),
+        p95_duration_seconds=percentile(sorted(durations), 95) if durations else None,
     )
 
 
@@ -209,12 +218,20 @@ def _show_cost(summaries: List[AgentSummary]) -> bool:
     return any(summary.cost_usd is not None for summary in summaries)
 
 
-def render_markdown(summaries: List[AgentSummary], now: Optional[datetime] = None) -> str:
-    """Render summaries as a markdown table; ``now`` is injectable for tests."""
+def render_markdown(
+    summaries: List[AgentSummary],
+    now: Optional[datetime] = None,
+    include_p95: bool = False,
+) -> str:
+    """Render summaries as a markdown table; ``now`` is injectable for tests.
+
+    ``include_p95=True`` (the ``board --p95`` flag) adds a per-agent p95
+    duration column; the default output is unchanged.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
     show_cost = _show_cost(summaries)
-    lines = list(_MARKDOWN_HEADER_WITH_COST if show_cost else _MARKDOWN_HEADER)
+    lines = _markdown_header(show_cost, include_p95)
     for summary in summaries:
         line = "| %s | %s %s | %s | %s | %d | %d | %d | %s |" % (
             summary.agent,
@@ -227,14 +244,24 @@ def render_markdown(summaries: List[AgentSummary], now: Optional[datetime] = Non
             summary.streak,
             _format_duration(summary.avg_duration_seconds),
         )
+        if include_p95:
+            line += " %s |" % _format_duration(summary.p95_duration_seconds)
         if show_cost:
             line += " %s |" % _format_cost(summary.cost_usd)
         lines.append(line)
     return "\n".join(lines)
 
 
-def render_html(summaries: List[AgentSummary], now: Optional[datetime] = None) -> str:
-    """Render summaries as a minimal self-contained HTML page (no JS, no assets)."""
+def render_html(
+    summaries: List[AgentSummary],
+    now: Optional[datetime] = None,
+    include_p95: bool = False,
+) -> str:
+    """Render summaries as a minimal self-contained HTML page (no JS, no assets).
+
+    ``include_p95=True`` (the ``board --p95`` flag) adds a per-agent p95
+    duration column; the default output is unchanged.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
     show_cost = _show_cost(summaries)
@@ -256,8 +283,12 @@ def render_html(summaries: List[AgentSummary], now: Optional[datetime] = None) -
                 html.escape(_format_duration(summary.avg_duration_seconds)),
             )
         )
+        if include_p95:
+            row += "<td>%s</td>" % html.escape(_format_duration(summary.p95_duration_seconds))
         if show_cost:
             row += "<td>%s</td>" % html.escape(_format_cost(summary.cost_usd))
         rows.append(row + "</tr>")
-    header = _HTML_HEADER % ("<th>Cost</th>" if show_cost else "")
+    header = _HTML_HEADER % (
+        ("<th>p95</th>" if include_p95 else "") + ("<th>Cost</th>" if show_cost else "")
+    )
     return _HTML_TEMPLATE % (header, "\n".join(rows))

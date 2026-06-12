@@ -4,9 +4,10 @@ Usage::
 
     agentmesh tail [--run RUN] [--agent NAME] [-n N] [--follow] [--db PATH]
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
-    agentmesh board [--since ISO] [--html PATH] [--out PATH] [--db PATH]
+    agentmesh board [--since ISO] [--p95] [--html PATH] [--out PATH] [--db PATH]
     agentmesh costs [--by run|agent|model] [--since ISO] [--db PATH]
     agentmesh flaky [--window N] [--since ISO] [--db PATH]
+    agentmesh latency [--by agent|model] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
     agentmesh export-otlp RUN_ID [--db PATH] [--out PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
@@ -40,6 +41,12 @@ from agentmesh.events import Event
 from agentmesh.flaky import agent_outcomes, flakiness_metrics, render_flaky
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
+from agentmesh.latency import (
+    GROUP_BY_CHOICES as LATENCY_GROUP_BY_CHOICES,
+    latency_stats,
+    render_latency,
+    span_durations,
+)
 from agentmesh.maintenance import prune_events, render_stats, store_stats
 from agentmesh.otlp import export_otlp
 from agentmesh.server import serve
@@ -132,6 +139,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Only events at or after this ISO-8601 UTC timestamp.",
     )
     board.add_argument(
+        "--p95",
+        action="store_true",
+        dest="p95",
+        help="Add a per-agent p95 duration column.",
+    )
+    board.add_argument(
         "--html",
         default=None,
         dest="html_path",
@@ -192,6 +205,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Only events at or after this ISO-8601 UTC timestamp.",
     )
     flaky_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    latency_cmd = subparsers.add_parser(
+        "latency",
+        help="Latency percentiles (p50/p90/p99) of completed spans per agent or model.",
+    )
+    latency_cmd.add_argument(
+        "--by",
+        default="agent",
+        choices=LATENCY_GROUP_BY_CHOICES,
+        dest="group_by",
+        help="Group span durations by agent or model (default: agent).",
+    )
+    latency_cmd.add_argument(
+        "--since",
+        default=None,
+        help="Only spans started at or after this ISO-8601 UTC timestamp.",
+    )
+    latency_cmd.add_argument(
         "--db",
         default=None,
         metavar="PATH",
@@ -396,14 +432,15 @@ def _ingest_gha(args: argparse.Namespace) -> int:
 def _board(args: argparse.Namespace) -> int:
     store = EventStore(args.db) if args.db else EventStore()
     summaries = agent_summaries(store, since=args.since)
-    markdown = render_markdown(summaries)
+    markdown = render_markdown(summaries, include_p95=args.p95)
     if args.out_path:
         Path(args.out_path).write_text(markdown + "\n", encoding="utf-8")
         print("wrote %s" % args.out_path)
     else:
         print(markdown)
     if args.html_path:
-        Path(args.html_path).write_text(render_html(summaries), encoding="utf-8")
+        html_page = render_html(summaries, include_p95=args.p95)
+        Path(args.html_path).write_text(html_page, encoding="utf-8")
         print("wrote %s" % args.html_path)
     return 0
 
@@ -422,6 +459,14 @@ def _flaky(args: argparse.Namespace) -> int:
         print("error: %s" % exc, file=sys.stderr)
         return 1
     print(render_flaky(flakiness_metrics(outcomes)))
+    return 0
+
+
+def _latency(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    samples = span_durations(store, since=args.since)
+    durations = samples.by_agent if args.group_by == "agent" else samples.by_model
+    print(render_latency(latency_stats(durations), by=args.group_by, since=args.since))
     return 0
 
 
@@ -560,6 +605,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _costs(args)
     if args.command == "flaky":
         return _flaky(args)
+    if args.command == "latency":
+        return _latency(args)
     if args.command == "trace":
         return _trace(args)
     if args.command == "export-otlp":
