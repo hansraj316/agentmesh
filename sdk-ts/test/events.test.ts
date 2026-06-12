@@ -82,6 +82,59 @@ describe("validateEvent", () => {
   });
 });
 
+describe("validateEvent — AMP v0.3 usage fields", () => {
+  it.each(["agent_end", "tool_call"])("accepts valid usage fields on %s", (type) => {
+    const payload = { input_tokens: 0, output_tokens: 12, cost_usd: 0.0, model: "m-1" };
+    expect(() => validateEvent({ ...valid(), type, payload })).not.toThrow();
+  });
+
+  it("absent usage keys are fine — v0.2 events validate unchanged", () => {
+    const event = {
+      ...valid(),
+      type: "agent_end",
+      payload: { duration_seconds: 0.5, span_id: "sp-1" },
+    };
+    expect(() => validateEvent(event)).not.toThrow();
+  });
+
+  it.each([
+    [{ input_tokens: "100" }, /input_tokens/],
+    [{ input_tokens: -1 }, /input_tokens/],
+    [{ input_tokens: true }, /input_tokens/], // bool rejected where an int is expected
+    [{ input_tokens: 1.5 }, /input_tokens/],
+    [{ output_tokens: 1.5 }, /output_tokens/],
+    [{ output_tokens: false }, /output_tokens/],
+    [{ cost_usd: "0.01" }, /cost_usd/],
+    [{ cost_usd: -0.01 }, /cost_usd/],
+    [{ cost_usd: true }, /cost_usd/],
+    [{ cost_usd: Number.NaN }, /cost_usd/],
+    [{ cost_usd: Number.POSITIVE_INFINITY }, /cost_usd/],
+    [{ model: "" }, /model/],
+    [{ model: 42 }, /model/],
+  ])("rejects invalid usage payload %j when present", (payload, match) => {
+    for (const type of ["agent_end", "tool_call"]) {
+      expect(() => validateEvent({ ...valid(), type, payload: { ...payload } })).toThrow(match);
+    }
+  });
+
+  it("valid partial combos are accepted", () => {
+    const combos = [
+      { cost_usd: 0.02 },
+      { input_tokens: 5, model: "m-1" },
+      { output_tokens: 3, cost_usd: 1 }, // an int cost is a fine number
+    ];
+    for (const payload of combos) {
+      expect(() => validateEvent({ ...valid(), type: "agent_end", payload })).not.toThrow();
+    }
+  });
+
+  it("usage keys on other event types stay free-form", () => {
+    // The spec defines usage fields on agent_end/tool_call only.
+    const event = { ...valid(), type: "message", payload: { input_tokens: "free-form" } };
+    expect(() => validateEvent(event)).not.toThrow();
+  });
+});
+
 describe("newEvent", () => {
   it("builds a valid event with fresh id and current UTC ts", () => {
     const event = newEvent("run-9", "writer", "message", { text: "hi" });

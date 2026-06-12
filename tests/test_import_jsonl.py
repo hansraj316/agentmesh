@@ -117,3 +117,17 @@ def test_imported_events_round_trip_into_event_objects(jsonl_file, store):
     for event in store.query():
         assert isinstance(event, Event)
         event.validate()
+
+
+def test_usage_fields_import_and_show_up_in_costs(tmp_path, store, capsys):
+    path = tmp_path / "usage.jsonl"
+    payload = {"input_tokens": 1000, "output_tokens": 200, "cost_usd": 0.0034, "model": "m-1"}
+    path.write_text(_event_line("e-usage", type="agent_end", payload=payload) + "\n")
+
+    assert import_jsonl(path, store) == (1, 0)
+    assert store.query()[0].payload["cost_usd"] == 0.0034
+
+    assert main(["costs"]) == 0
+    out = capsys.readouterr().out
+    assert "run-ts" in out
+    assert "$0.0034" in out

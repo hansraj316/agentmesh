@@ -7,4 +7,4 @@ export {
   type EventType,
 } from "./events.js";
 export { JsonlFileSink, MemorySink, type Sink } from "./sink.js";
-export { Mesh } from "./sdk.js";
+export { Mesh, type UsageRecord } from "./sdk.js";

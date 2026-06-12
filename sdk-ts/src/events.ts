@@ -1,5 +1,5 @@
 /**
- * AMP v0.2 event model — TypeScript mirror of agentmesh/events.py.
+ * AMP v0.3 event model — TypeScript mirror of agentmesh/events.py.
  * See docs/amp-spec.md in the repository root.
  */
 
@@ -15,7 +15,10 @@ export const EVENT_TYPES = [
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
-/** A single AMP v0.2 event (see docs/amp-spec.md). */
+// Event types that may carry the optional AMP v0.3 usage payload fields.
+const USAGE_EVENT_TYPES: ReadonlySet<string> = new Set(["agent_end", "tool_call"]);
+
+/** A single AMP v0.3 event (see docs/amp-spec.md). */
 export interface AmpEvent {
   event_id: string;
   run_id: string;
@@ -68,14 +71,50 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Validate one AMP v0.2 event, mirroring Event.validate() in
+ * Validate the optional AMP v0.3 usage payload keys, if present — mirror of
+ * _validate_usage() in agentmesh/events.py.
+ *
+ * Absent keys are always fine (v0.1/v0.2 events validate unchanged); a
+ * present key with the wrong type or a negative value throws. Booleans are
+ * rejected wherever a number is expected (mirrors Python, where bool is a
+ * subclass of int but is explicitly refused).
+ */
+function validateUsage(payload: Record<string, unknown>): void {
+  for (const name of ["input_tokens", "output_tokens"] as const) {
+    if (name in payload) {
+      const value = payload[name];
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new Error(
+          `${name} must be a non-negative integer, got ${JSON.stringify(value)}`,
+        );
+      }
+    }
+  }
+  if ("cost_usd" in payload) {
+    const value = payload["cost_usd"];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new Error(`cost_usd must be a non-negative number, got ${JSON.stringify(value)}`);
+    }
+  }
+  if ("model" in payload) {
+    const value = payload["model"];
+    if (typeof value !== "string" || value === "") {
+      throw new Error(`model must be a non-empty string, got ${JSON.stringify(value)}`);
+    }
+  }
+}
+
+/**
+ * Validate one AMP v0.3 event, mirroring Event.validate() in
  * agentmesh/events.py. Throws an Error describing the first violation;
  * returns the event (narrowed to AmpEvent) when valid.
  *
  * Rules: all six fields present; event_id/run_id/agent non-empty strings;
  * type one of EVENT_TYPES; ts ISO-8601 with a UTC offset of zero; payload
  * a JSON object. v0.2 span fields (payload.span_id / payload.parent_span_id)
- * are optional but must be non-empty strings when present.
+ * are optional but must be non-empty strings when present. On agent_end and
+ * tool_call events the optional v0.3 usage fields (input_tokens,
+ * output_tokens, cost_usd, model) are validated when present.
  */
 export function validateEvent(event: unknown): AmpEvent {
   if (!isPlainObject(event)) {
@@ -110,6 +149,9 @@ export function validateEvent(event: unknown): AmpEvent {
         );
       }
     }
+  }
+  if (USAGE_EVENT_TYPES.has(type)) {
+    validateUsage(payload);
   }
   return event as unknown as AmpEvent;
 }

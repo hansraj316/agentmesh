@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { validateEvent } from "../src/events.js";
 import { Mesh } from "../src/sdk.js";
@@ -178,5 +178,115 @@ describe("span nesting", () => {
     });
     expect(() => boom()).toThrow("kaput");
     expect(sink.events[1]!.payload["span_id"]).toBe(sink.events[0]!.payload["span_id"]);
+  });
+});
+
+describe("mesh.recordUsage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const endEvents = () => sink.events.filter((e) => e.type === "agent_end");
+
+  it("merges usage into the agent_end payload with snake_case wire keys", () => {
+    const work = mesh.agent("researcher", () => {
+      mesh.recordUsage({ inputTokens: 100, outputTokens: 40, costUsd: 0.01, model: "m-1" });
+      return "ok";
+    });
+
+    mesh.run("run-usage", () => work());
+
+    const [start, end] = sink.events;
+    expect(end!.payload["input_tokens"]).toBe(100);
+    expect(end!.payload["output_tokens"]).toBe(40);
+    expect(end!.payload["cost_usd"]).toBeCloseTo(0.01);
+    expect(end!.payload["model"]).toBe("m-1");
+    expect(Object.keys(end!.payload)).toEqual(
+      expect.arrayContaining(["input_tokens", "output_tokens", "cost_usd", "model"]),
+    );
+    expect("input_tokens" in start!.payload).toBe(false); // usage lands on agent_end only
+    expect(() => validateEvent(end!)).not.toThrow(); // AMP v0.3 valid
+  });
+
+  it("sums token/cost numbers across calls; model last-non-null wins", () => {
+    const work = mesh.agent("researcher", () => {
+      mesh.recordUsage({ inputTokens: 100, outputTokens: 10, costUsd: 0.01, model: "m-1" });
+      mesh.recordUsage({ inputTokens: 50, costUsd: 0.005 });
+      mesh.recordUsage({ outputTokens: 5, model: "m-2" });
+    });
+
+    mesh.run("run-sum", () => work());
+
+    const end = endEvents()[0]!;
+    expect(end.payload["input_tokens"]).toBe(150);
+    expect(end.payload["output_tokens"]).toBe(15);
+    expect(end.payload["cost_usd"]).toBeCloseTo(0.015);
+    expect(end.payload["model"]).toBe("m-2");
+  });
+
+  it("only passed fields appear in the payload", () => {
+    const work = mesh.agent("partial", () => {
+      mesh.recordUsage({ costUsd: 0.02 });
+    });
+
+    mesh.run("run-partial", () => work());
+
+    const end = endEvents()[0]!;
+    expect(end.payload["cost_usd"]).toBeCloseTo(0.02);
+    expect("input_tokens" in end.payload).toBe(false);
+    expect("output_tokens" in end.payload).toBe(false);
+    expect("model" in end.payload).toBe(false);
+  });
+
+  it("accumulates across awaits in async agents", async () => {
+    const work = mesh.agent("async-worker", async () => {
+      mesh.recordUsage({ inputTokens: 10, model: "m-async" });
+      await Promise.resolve();
+      mesh.recordUsage({ inputTokens: 20, costUsd: 0.003 });
+    });
+
+    await mesh.run("run-async-usage", () => work());
+
+    const end = endEvents()[0]!;
+    expect(end.payload["input_tokens"]).toBe(30);
+    expect(end.payload["cost_usd"]).toBeCloseTo(0.003);
+    expect(end.payload["model"]).toBe("m-async");
+  });
+
+  it("keeps nested spans isolated — child usage does not leak to the parent", () => {
+    const inner = mesh.agent("inner", () => {
+      mesh.recordUsage({ inputTokens: 5 });
+    });
+    const outer = mesh.agent("outer", () => {
+      mesh.recordUsage({ inputTokens: 100 });
+      inner();
+    });
+
+    mesh.run("run-nested-usage", () => outer());
+
+    const ends = new Map(endEvents().map((e) => [e.agent, e]));
+    expect(ends.get("outer")!.payload["input_tokens"]).toBe(100);
+    expect(ends.get("inner")!.payload["input_tokens"]).toBe(5);
+  });
+
+  it("outside any span warns per call and is a no-op", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    mesh.recordUsage({ inputTokens: 10, costUsd: 0.01 });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("outside any"));
+    expect(sink.events).toHaveLength(0);
+  });
+
+  it("inside mesh.run but outside an agent span still warns", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    mesh.run("run-bare", () => {
+      mesh.recordUsage({ inputTokens: 1 });
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(sink.events).toHaveLength(0);
   });
 });

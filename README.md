@@ -383,7 +383,7 @@ curl -s http://127.0.0.1:7777/api/runs/my-run-42 | python3 -m json.tool
 [`sdk-ts/`](sdk-ts/) is a dependency-free TypeScript mirror of the Python SDK:
 wrap any sync or async function with `mesh.agent(name, fn)` and it emits
 `agent_start`, `agent_end` (with `duration_seconds`), and `agent_error`
-(re-thrown) AMP v0.2 events, with span nesting propagated through async code
+(re-thrown) AMP events, with span nesting propagated through async code
 via `AsyncLocalStorage`. Events are written as JSON Lines:
 
 ```ts
@@ -394,6 +394,27 @@ const mesh = new Mesh(new JsonlFileSink("events.jsonl"));
 const writer = mesh.agent("writer", async (task: string) => draft(task));
 
 await mesh.run("my-run-42", () => writer("intro"));
+```
+
+`mesh.recordUsage(...)` mirrors Python's `mesh.record_usage` (AMP v0.3): call
+it anywhere inside a wrapped agent — sync or async — and the usage is merged
+into that span's `agent_end` payload as `input_tokens` / `output_tokens` /
+`cost_usd` / `model`. Token and cost numbers sum across calls within a span,
+the last non-null `model` wins, nested spans stay isolated, and outside any
+span the call warns and is dropped — exactly like the Python SDK, so
+`agentmesh costs` and `agentmesh trace` account TS agents the same way:
+
+```ts
+const writer = mesh.agent("writer", async (task: string) => {
+  const result = await draft(task);
+  mesh.recordUsage({
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    costUsd: 0.0034,
+    model: "m-big",
+  });
+  return result.text;
+});
 ```
 
 Then bridge the JSONL file into the Python event store — the import is
