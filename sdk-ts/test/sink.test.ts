@@ -40,6 +40,30 @@ describe("JsonlFileSink", () => {
     expect(new Set(events.map((e) => e.run_id))).toEqual(new Set(["run-jsonl"]));
   });
 
+  it("writes AMP v0.3 usage fields that validate from the wire", () => {
+    const path = join(dir, "usage.jsonl");
+    const mesh = new Mesh(new JsonlFileSink(path));
+    const work = mesh.agent("researcher", () => {
+      mesh.recordUsage({ inputTokens: 1000, outputTokens: 200, costUsd: 0.0034, model: "m-1" });
+      return "ok";
+    });
+
+    mesh.run("run-usage-jsonl", () => work());
+
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    const events = lines.map((line) => validateEvent(JSON.parse(line)));
+    const end = events.find((e) => e.type === "agent_end")!;
+    expect(end.payload["input_tokens"]).toBe(1000);
+    expect(end.payload["output_tokens"]).toBe(200);
+    expect(end.payload["cost_usd"]).toBeCloseTo(0.0034);
+    expect(end.payload["model"]).toBe("m-1");
+    // snake_case on the wire, exactly as the Python importer expects
+    const raw = JSON.parse(lines[lines.length - 1]!) as { payload: Record<string, unknown> };
+    expect(Object.keys(raw.payload)).toEqual(
+      expect.arrayContaining(["input_tokens", "output_tokens", "cost_usd", "model"]),
+    );
+  });
+
   it("creates missing parent directories", () => {
     const path = join(dir, "nested", "deeper", "events.jsonl");
     const sink = new JsonlFileSink(path);

@@ -7,6 +7,11 @@
  * extend this file if new builtins are needed.
  */
 
+/** The Node.js global console — only the methods this package uses. */
+declare var console: {
+  warn(message?: unknown, ...optionalParams: unknown[]): void;
+};
+
 declare module "node:crypto" {
   export function randomUUID(): string;
 }
