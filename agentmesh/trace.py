@@ -35,6 +35,7 @@ class Span:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    model: Optional[str] = None
     children: List["Span"] = field(default_factory=list)
 
 
@@ -144,6 +145,9 @@ def _add_usage(span: Span, event: Event) -> None:
     cost = event.payload.get("cost_usd")
     if isinstance(cost, (int, float)) and not isinstance(cost, bool):
         span.cost_usd = (span.cost_usd or 0.0) + float(cost)
+    model = event.payload.get("model")
+    if isinstance(model, str) and model:
+        span.model = model
 
 
 def _payload_int(event: Event, key: str) -> Optional[int]:

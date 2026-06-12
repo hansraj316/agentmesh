@@ -200,6 +200,39 @@ a per-agent Cost column, and `agentmesh trace` annotates spans with their
 usage, e.g. `researcher ✓ 2.0s [1.2k tok, $0.0034]` — stores without usage
 data render exactly as before.
 
+## Export to OpenTelemetry
+
+Ship a run's span tree to any OpenTelemetry-compatible backend (Jaeger,
+Grafana Tempo, an OTel Collector) as an OTLP/JSON trace document — no
+OpenTelemetry SDK dependency, the stable OTLP JSON encoding is emitted
+directly:
+
+```bash
+agentmesh export-otlp my-run-42 --out trace.json
+```
+
+One-liner into a local Jaeger (v2 and recent v1 builds accept OTLP/JSON on
+port 4318):
+
+```bash
+agentmesh export-otlp my-run-42 | curl -sS -X POST http://localhost:4318/v1/traces \
+  -H 'Content-Type: application/json' --data-binary @-
+```
+
+Then open the `agentmesh` service in the Jaeger UI. The same `POST
+/v1/traces` works against any OTel Collector `otlp` http receiver, which can
+forward to Tempo and friends.
+
+Details: the `traceId` is derived deterministically from the `run_id` (md5
+hex — a stable derivation, not random, so re-exports map to the same trace),
+span ids likewise from each AMP `span_id`; span status maps `ok` →
+`STATUS_CODE_OK` and `failed` → `STATUS_CODE_ERROR` with the error's first
+line as the message; usage data becomes `gen_ai.usage.input_tokens` /
+`gen_ai.usage.output_tokens` / `gen_ai.request.model` (OTel GenAI semantic
+conventions) plus `agentmesh.cost_usd`. Only completed spans are exported —
+still-running spans have no end time and are skipped. Without `--out` the
+JSON goes to stdout; an unknown run exits 1.
+
 ## Compare runs
 
 Did yesterday's deploy make the pipeline slower? Diff two runs of the same
