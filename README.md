@@ -241,6 +241,41 @@ The table is sorted flakiest-first (intermittency, then failure rate), so
 the agents quietly sabotaging your pipelines float to the top. `--db PATH`
 points at a different event database, as everywhere else.
 
+## Latency percentiles
+
+Averages hide tail pain — one 90-second outlier disappears in a mean over
+dozens of 2-second runs but blows straight through any SLO. The latency view
+distributes completed-span durations into percentiles, per agent or per
+model:
+
+```bash
+agentmesh latency                    # per agent (default)
+agentmesh latency --by model         # per model (AMP v0.3 usage field)
+agentmesh latency --since 2026-06-01T00:00:00+00:00
+```
+
+```
+Latency percentiles by agent (all time)
+
+| Agent | Spans | Min | p50 | p90 | p99 | Max | Mean |
+|-------|-------|-----|-----|-----|-----|-----|------|
+| researcher | 24 | 1.2s | 2.0s | 4.8s | 12.4s | 14.1s | 2.9s |
+| writer | 18 | 0.8s | 1.3s | 2.1s | 2.4s | 2.4s | 1.4s |
+```
+
+Spans are paired exactly like `agentmesh trace` (span ids, with the v0.1
+per-agent fallback) and durations come from the same sources as `trace` and
+`board`: the terminal event's `duration_seconds` payload, then
+`duration_ms`, then the start→end timestamp difference. Both ok and failed
+spans count — a failure's duration is still latency the caller waited —
+while still-running spans are skipped. Percentiles use linear interpolation
+between the closest ranks, and rows are sorted busiest-first (span count,
+then name). `--since ISO` keeps only spans *started* at or after the
+timestamp (the header notes the window), and `--db PATH` points at a
+different event database. For a quick glance, `agentmesh board --p95` adds a
+per-agent p95 duration column to the status board — without the flag the
+board renders exactly as before.
+
 ## Export to OpenTelemetry
 
 Ship a run's span tree to any OpenTelemetry-compatible backend (Jaeger,
