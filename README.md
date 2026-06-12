@@ -200,6 +200,47 @@ a per-agent Cost column, and `agentmesh trace` annotates spans with their
 usage, e.g. `researcher ✓ 2.0s [1.2k tok, $0.0034]` — stores without usage
 data render exactly as before.
 
+## Find flaky agents
+
+An agent that fails *sometimes* is worse than one that fails always — it
+erodes trust slowly and hides in averages. The flakiness report ranks your
+fleet by how erratically each agent's completed runs fail:
+
+```bash
+agentmesh flaky                      # full history
+agentmesh flaky --window 20          # only the 20 most recent runs per agent
+agentmesh flaky --since 2026-06-01T00:00:00+00:00
+```
+
+```
+| Agent | Class | Runs | Fail% | Intermittency | MTBF | Last failure |
+|-------|-------|------|-------|---------------|------|--------------|
+| scraper | flaky | 12 | 42% | 0.73 | 38m 20s | 12m ago |
+| writer | failing | 5 | 100% | 0.00 | 21m 5s | 3m ago |
+| researcher | stable | 12 | 0% | 0.00 | — | — |
+
+Legend: stable = no failures · failing = failure rate ≥ 80% · flaky = ≥2
+failures flip-flopping with outcomes (intermittency ≥ 0.3) · degraded =
+failures without strong flip-flopping.
+```
+
+Per agent, every completed run (a terminal `agent_end` or `agent_error`
+event; still-running runs are ignored) becomes an ok/failed outcome, and the
+outcome sequence yields:
+
+- **Intermittency** — adjacent outcome changes divided by (runs − 1): `0.00`
+  means the agent always does the same thing, `1.00` means it alternates
+  ok/failed every run — the signature of flakiness. With a single run there
+  are no adjacent pairs, so it shows `—`.
+- **MTBF** — mean time between consecutive failures (`—` with fewer than two).
+- **Class** — `stable` (no failures), `failing` (failure rate ≥ 80% — mostly
+  broken, fix it), `flaky` (≥2 failures interleaved with successes —
+  intermittency ≥ 0.3), `degraded` (some failures, e.g. a single burst).
+
+The table is sorted flakiest-first (intermittency, then failure rate), so
+the agents quietly sabotaging your pipelines float to the top. `--db PATH`
+points at a different event database, as everywhere else.
+
 ## Export to OpenTelemetry
 
 Ship a run's span tree to any OpenTelemetry-compatible backend (Jaeger,

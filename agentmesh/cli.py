@@ -6,6 +6,7 @@ Usage::
     agentmesh ingest-gha OWNER --repo R1 [--repo R2 ...] [--limit N]
     agentmesh board [--since ISO] [--html PATH] [--out PATH] [--db PATH]
     agentmesh costs [--by run|agent|model] [--since ISO] [--db PATH]
+    agentmesh flaky [--window N] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
     agentmesh export-otlp RUN_ID [--db PATH] [--out PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
@@ -36,6 +37,7 @@ from agentmesh.costs import GROUP_BY_CHOICES, render_costs, usage_summary
 from agentmesh.demo import DEMO_DB_PATH, DEMO_RULES_FILENAME, demo_tour, seed_demo, write_demo_rules
 from agentmesh.diff import diff_traces, render_diff
 from agentmesh.events import Event
+from agentmesh.flaky import agent_outcomes, flakiness_metrics, render_flaky
 from agentmesh.ingest_gha import ingest
 from agentmesh.jsonl import import_jsonl
 from agentmesh.maintenance import prune_events, render_stats, store_stats
@@ -167,6 +169,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Only events at or after this ISO-8601 UTC timestamp.",
     )
     costs_cmd.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    flaky_cmd = subparsers.add_parser(
+        "flaky",
+        help="Rank agents by flakiness: intermittency, failure rate, MTBF.",
+    )
+    flaky_cmd.add_argument(
+        "--window",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Only the N most recent completed runs per agent.",
+    )
+    flaky_cmd.add_argument(
+        "--since",
+        default=None,
+        help="Only events at or after this ISO-8601 UTC timestamp.",
+    )
+    flaky_cmd.add_argument(
         "--db",
         default=None,
         metavar="PATH",
@@ -389,6 +414,17 @@ def _costs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _flaky(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        outcomes = agent_outcomes(store, window=args.window, since=args.since)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    print(render_flaky(flakiness_metrics(outcomes)))
+    return 0
+
+
 def _trace(args: argparse.Namespace) -> int:
     store = EventStore(args.db) if args.db else EventStore()
     try:
@@ -522,6 +558,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _board(args)
     if args.command == "costs":
         return _costs(args)
+    if args.command == "flaky":
+        return _flaky(args)
     if args.command == "trace":
         return _trace(args)
     if args.command == "export-otlp":
