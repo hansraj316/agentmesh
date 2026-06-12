@@ -507,6 +507,51 @@ older than the cutoff are deleted, so traces always stay complete.
 `--older-than` accepts `30d` or a bare day count like `30`, and `--db PATH`
 overrides the event database on both commands.
 
+## Configuration
+
+Tired of repeating `--db`, `--rules`, or `--port` on every command? Put the
+defaults in a JSON config file at `~/.agentmesh/config.json` (override the
+location with `$AGENTMESH_CONFIG` or the global `--config PATH` flag, given
+before the subcommand):
+
+```json
+{
+  "db": "/data/agentmesh/events.db",
+  "rules": "/data/agentmesh/alerts.json",
+  "port": 8080,
+  "threshold": 35.0,
+  "window": 50,
+  "since": "2026-01-01T00:00:00Z"
+}
+```
+
+All keys are optional; unknown keys are rejected with an error naming them.
+
+| Key | Type | Used by |
+|-----|------|---------|
+| `db` | string path | every command with `--db` (except `demo`, which keeps its own database) |
+| `rules` | string path | `alerts`, `serve` |
+| `port` | integer | `serve` |
+| `threshold` | number (percent) | `diff` |
+| `window` | integer | `flaky` |
+| `since` | ISO-8601 string | every command with `--since` (`board`, `costs`, `flaky`, `latency`) |
+
+Precedence, highest first:
+
+1. explicit CLI flag (`--db`, `--rules`, `--port`, `--threshold`, `--window`, `--since`)
+2. environment variable (`$AGENTMESH_DB`, `$AGENTMESH_ALERTS` — only these exist)
+3. config file value
+4. built-in default (`~/.agentmesh/events.db`, `~/.agentmesh/alerts.json`, port 7777, threshold 20, no window, all time)
+
+Inspect what is in effect and where each value comes from:
+
+```bash
+agentmesh config                       # table of key | effective value | source
+agentmesh config --config other.json   # inspect a specific config file
+```
+
+Sources are reported for the no-flag case; explicit flags always win.
+
 ## Framework Support (v0.1 target)
 
 | Framework | Adapter |
