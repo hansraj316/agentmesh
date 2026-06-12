@@ -6,5 +6,5 @@ export {
   type AmpEvent,
   type EventType,
 } from "./events.js";
-export { JsonlFileSink, MemorySink, type Sink } from "./sink.js";
+export { HttpSink, JsonlFileSink, MemorySink, type Sink } from "./sink.js";
 export { Mesh, type UsageRecord } from "./sdk.js";

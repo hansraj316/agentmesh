@@ -350,8 +350,9 @@ agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50 && agentmesh alerts 
 ## Serve the live board
 
 `agentmesh serve` turns the fleet workflow into a live dashboard: it serves
-the HTML board plus a read-only JSON API from the event store, using only the
-Python standard library (no daemon dependencies).
+the HTML board plus a JSON API over the event store (read routes plus a
+webhook ingestion endpoint), using only the Python standard library (no
+daemon dependencies).
 
 ```bash
 agentmesh ingest-gha hansraj316 --repo agentmesh --limit 50
@@ -372,11 +373,37 @@ stops it cleanly.
 | `/api/agents` | JSON list of agent summaries (one per agent) |
 | `/api/runs/<run_id>` | JSON span tree of one run (404 + JSON error if unknown) |
 | `/api/alerts` | JSON webhook payloads for fired alert rules (`[]` with no rules) |
+| `POST /api/events` | Webhook ingestion: accepts one AMP event object or an array of up to 1000 (202 `{"accepted": n, "skipped": m}`) |
 
 ```bash
 curl -s http://127.0.0.1:7777/api/agents | python3 -m json.tool
 curl -s http://127.0.0.1:7777/api/runs/my-run-42 | python3 -m json.tool
 ```
+
+Agents can also push events to the daemon instead of writing the SQLite
+file directly:
+
+```bash
+curl -s -X POST http://127.0.0.1:7777/api/events \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "event_id": "e-1", "run_id": "my-run-42", "agent": "writer",
+        "type": "agent_start", "ts": "2026-06-12T08:00:00+00:00",
+        "payload": {"span_id": "sp-1"}
+      }'
+# {"accepted": 1, "skipped": 0}
+```
+
+The body may be a single event object or a JSON array (at most 1000 events
+and 5 MB per request; `Content-Type: application/json` is required).
+Ingestion is **all-or-nothing**: every event in the request is validated
+against the AMP spec before anything is written, and one invalid event
+rejects the whole batch with a 400 naming the offending index. Re-POSTing
+the same events is safe — duplicate `event_id`s are counted in `skipped`
+rather than re-inserted. Like the rest of the server, this is a
+trusted-local-network feature: it stays behind the 127.0.0.1-only default
+and there is no authentication in v1, so anyone who can reach the socket
+can write events.
 
 ## TypeScript SDK (experimental)
 
@@ -481,7 +508,7 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 ### v0.1 — See Everything
 - [x] AMP protocol spec ([docs/amp-spec.md](docs/amp-spec.md))
 - [x] Python SDK (`@mesh.agent` decorator + SQLite event store + `agentmesh tail` CLI)
-- [x] Serve daemon (`agentmesh serve` — live board + read-only JSON API, stdlib-only)
+- [x] Serve daemon (`agentmesh serve` — live board + JSON API + `POST /api/events` webhook ingestion, stdlib-only)
 - [ ] Real-time Dashboard (React + WebSocket)
 - [ ] Claude Agent SDK adapter
 - [ ] LangGraph adapter

@@ -12,6 +12,16 @@ declare var console: {
   warn(message?: unknown, ...optionalParams: unknown[]): void;
 };
 
+/** The Node.js (18+) global fetch — only the surface HttpSink uses. */
+declare function fetch(
+  url: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
 declare module "node:crypto" {
   export function randomUUID(): string;
 }

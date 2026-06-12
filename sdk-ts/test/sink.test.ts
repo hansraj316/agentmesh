@@ -1,11 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { validateEvent } from "../src/events.js";
 import { Mesh } from "../src/sdk.js";
-import { JsonlFileSink, MemorySink } from "../src/sink.js";
+import { HttpSink, JsonlFileSink, MemorySink } from "../src/sink.js";
 
 let dir: string;
 
@@ -92,6 +92,48 @@ describe("JsonlFileSink", () => {
     new JsonlFileSink(path).emit({ ...event, event_id: "e-2" });
     const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
     expect(lines.map((line) => JSON.parse(line).event_id)).toEqual(["e-1", "e-2"]);
+  });
+});
+
+describe("HttpSink", () => {
+  const event = {
+    event_id: "e-http-1",
+    run_id: "r-1",
+    agent: "a",
+    type: "message" as const,
+    ts: "2026-06-10T00:00:00+00:00",
+    payload: {},
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the event as JSON and surfaces non-2xx as thrown errors", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 202, text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sink = new HttpSink("http://127.0.0.1:7777/api/events");
+    await sink.emit(event);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { method: string; headers: Record<string, string>; body: string },
+    ];
+    expect(url).toBe("http://127.0.0.1:7777/api/events");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(init.body)).toEqual(event);
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid event"}',
+    });
+    await expect(sink.emit(event)).rejects.toThrow(
+      'POST http://127.0.0.1:7777/api/events failed with status 400: {"error":"invalid event"}',
+    );
   });
 });
 

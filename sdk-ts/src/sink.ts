@@ -3,6 +3,8 @@
  *
  * The v1 bridge to the Python store is a JSONL file — emit events with
  * JsonlFileSink, then import them with `agentmesh import-jsonl PATH`.
+ * HttpSink instead POSTs each event to a running `agentmesh serve` daemon
+ * (POST /api/events).
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -34,6 +36,34 @@ export class JsonlFileSink implements Sink {
 
   emit(event: AmpEvent): void {
     appendFileSync(this.path, JSON.stringify(event) + "\n");
+  }
+}
+
+/**
+ * POSTs each event as JSON to a webhook URL — typically the agentmesh serve
+ * daemon's `POST /api/events` route. One fetch per event (no batching in
+ * v1); a non-2xx response or network failure surfaces as a thrown error
+ * (an async rejection from `emit`).
+ */
+export class HttpSink implements Sink {
+  readonly url: string;
+
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  async emit(event: AmpEvent): Promise<void> {
+    const response = await fetch(this.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `POST ${this.url} failed with status ${response.status}${detail ? `: ${detail}` : ""}`,
+      );
+    }
   }
 }
 
