@@ -17,10 +17,15 @@ Usage::
     agentmesh stats [--db PATH]
     agentmesh prune --older-than 30d [--db PATH] [--dry-run]
     agentmesh demo [--db PATH] [--fresh]
+    agentmesh config [--config PATH]
+
+A global ``--config PATH`` flag (before the subcommand) points at a JSON
+config file that supplies defaults for repeated flags; see agentmesh.config.
 """
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,6 +39,15 @@ from agentmesh.alerts import (
     to_webhook_payloads,
 )
 from agentmesh.board import agent_summaries, render_html, render_markdown
+from agentmesh.config import (
+    DEFAULT_PORT,
+    DEFAULT_THRESHOLD,
+    Config,
+    effective_value,
+    load_config,
+    render_config,
+    resolve_settings,
+)
 from agentmesh.costs import GROUP_BY_CHOICES, render_costs, usage_summary
 from agentmesh.demo import DEMO_DB_PATH, DEMO_RULES_FILENAME, demo_tour, seed_demo, write_demo_rules
 from agentmesh.diff import diff_traces, render_diff
@@ -84,6 +98,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentmesh",
         description="AgentMesh — observability for multi-agent AI systems.",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="Config file with flag defaults "
+        "(default: $AGENTMESH_CONFIG or ~/.agentmesh/config.json).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -280,7 +301,7 @@ def _build_parser() -> argparse.ArgumentParser:
     diff_cmd.add_argument(
         "--threshold",
         type=float,
-        default=20.0,
+        default=None,
         metavar="PCT",
         help="Duration change (in percent) that counts as significant (default: 20).",
     )
@@ -333,7 +354,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_cmd.add_argument(
         "--port",
         type=int,
-        default=7777,
+        default=None,
         help="Port to listen on at 127.0.0.1 (default: 7777).",
     )
     serve_cmd.add_argument(
@@ -401,7 +422,46 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete an existing demo database and reseed from scratch.",
     )
+
+    config_cmd = subparsers.add_parser(
+        "config",
+        help="Show the effective configuration and where each value comes from.",
+    )
+    config_cmd.add_argument(
+        "--config",
+        # SUPPRESS so an unused subcommand default never clobbers a value
+        # given via the global --config flag before the subcommand.
+        default=argparse.SUPPRESS,
+        metavar="PATH",
+        help="Config file with flag defaults "
+        "(default: $AGENTMESH_CONFIG or ~/.agentmesh/config.json).",
+    )
     return parser
+
+
+def _apply_config(args: argparse.Namespace, config: Config) -> None:
+    """Fill flag values the user did not pass from env/config-file/defaults.
+
+    Precedence stays: explicit flag > env var > config file > built-in
+    default. With no config file this reproduces today's behavior exactly.
+    The demo command keeps its own dedicated database and is left alone.
+    """
+    if hasattr(args, "db") and args.command != "demo":
+        args.db = effective_value("db", args.db, config, env_value=os.environ.get("AGENTMESH_DB"))
+    if hasattr(args, "rules"):
+        args.rules = effective_value(
+            "rules", args.rules, config, env_value=os.environ.get("AGENTMESH_ALERTS")
+        )
+    if hasattr(args, "port"):
+        args.port = effective_value("port", args.port, config, default=DEFAULT_PORT)
+    if hasattr(args, "threshold"):
+        args.threshold = effective_value(
+            "threshold", args.threshold, config, default=DEFAULT_THRESHOLD
+        )
+    if hasattr(args, "window"):
+        args.window = effective_value("window", args.window, config)
+    if hasattr(args, "since"):
+        args.since = effective_value("since", args.since, config)
 
 
 def _tail(args: argparse.Namespace) -> int:
@@ -593,8 +653,21 @@ def _demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _config(config: Config) -> int:
+    print(render_config(config, resolve_settings(config)))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    if args.command == "config":
+        return _config(config)
+    _apply_config(args, config)
     if args.command == "tail":
         return _tail(args)
     if args.command == "ingest-gha":
