@@ -32,6 +32,22 @@ def _get_json(url, expected_status=200):
     return json.loads(body.decode("utf-8"))
 
 
+def _post(url, body, content_type="application/json"):
+    """POST raw ``body`` bytes; returns (status, decoded JSON) even for errors."""
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": content_type}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.getcode(), json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _post_json(url, data, content_type="application/json"):
+    return _post(url, json.dumps(data).encode("utf-8"), content_type=content_type)
+
+
 @pytest.fixture
 def seeded(store):
     """One run: orchestrator (ok) with a nested writer span that failed."""
@@ -132,6 +148,87 @@ def test_api_alerts_empty_without_rules(serve_url, tmp_path, monkeypatch):
 def test_unknown_path_is_404_json(serve_url):
     data = _get_json(serve_url() + "/nope", expected_status=404)
     assert "/nope" in data["error"]
+
+
+def test_post_single_event_accepted_and_stored(serve_url, db_path):
+    event = Event.new("run-post", "ingestor", "message", {"text": "hi"})
+    status, data = _post_json(serve_url() + "/api/events", event.to_dict())
+    assert status == 202
+    assert data == {"accepted": 1, "skipped": 0}
+    stored = EventStore(db_path).query(run_id="run-post")
+    assert [e.event_id for e in stored] == [event.event_id]
+    assert stored[0].payload == {"text": "hi"}
+
+
+def test_post_array_accepts_all_events(serve_url, db_path):
+    events = [Event.new("run-batch", "a-%d" % i, "agent_start", {}) for i in range(3)]
+    status, data = _post_json(serve_url() + "/api/events", [e.to_dict() for e in events])
+    assert status == 202
+    assert data == {"accepted": 3, "skipped": 0}
+    stored = EventStore(db_path).query(run_id="run-batch")
+    assert [e.event_id for e in stored] == [e.event_id for e in events]
+
+
+def test_post_duplicate_events_are_skipped(serve_url, db_path):
+    url = serve_url() + "/api/events"
+    events = [Event.new("run-dup", "a", "agent_start", {}) for _ in range(2)]
+    body = [e.to_dict() for e in events]
+    assert _post_json(url, body) == (202, {"accepted": 2, "skipped": 0})
+    assert _post_json(url, body) == (202, {"accepted": 0, "skipped": 2})
+    assert len(EventStore(db_path).query(run_id="run-dup")) == 2
+
+
+def test_post_invalid_event_in_array_rejects_whole_batch(serve_url, db_path):
+    before = EventStore(db_path).count_events()
+    good = Event.new("run-bad", "a", "agent_start", {}).to_dict()
+    bad = dict(good, event_id="e-bad", type="not-a-type")
+    status, data = _post_json(serve_url() + "/api/events", [good, bad])
+    assert status == 400
+    assert "index 1" in data["error"]
+    assert "type" in data["error"]
+    # all-or-nothing: the valid event at index 0 was not written either
+    assert EventStore(db_path).count_events() == before
+
+
+def test_post_malformed_json_is_400(serve_url):
+    status, data = _post(serve_url() + "/api/events", b"{not json")
+    assert status == 400
+    assert "JSON" in data["error"]
+
+
+def test_post_wrong_content_type_is_415(serve_url):
+    event = Event.new("run-ct", "a", "message", {}).to_dict()
+    status, data = _post_json(serve_url() + "/api/events", event, content_type="text/plain")
+    assert status == 415
+    assert "application/json" in data["error"]
+
+
+def test_post_more_than_1000_events_is_413(serve_url, db_path):
+    before = EventStore(db_path).count_events()
+    events = [Event.new("run-big", "a", "message", {}).to_dict() for _ in range(1001)]
+    status, data = _post_json(serve_url() + "/api/events", events)
+    assert status == 413
+    assert "1001" in data["error"]
+    assert "1000" in data["error"]
+    assert EventStore(db_path).count_events() == before
+
+
+def test_post_unknown_path_is_404_json(serve_url):
+    status, data = _post_json(serve_url() + "/api/unknown", {})
+    assert status == 404
+    assert "/api/unknown" in data["error"]
+
+
+def test_get_routes_unaffected_after_post(serve_url, db_path):
+    url = serve_url()
+    event = Event.new("run-mix", "poster", "agent_start", {"span_id": "sp-p"})
+    assert _post_json(url + "/api/events", event.to_dict())[0] == 202
+    agents = _get_json(url + "/api/agents")
+    assert "poster" in [agent["agent"] for agent in agents]
+    status, content_type, body = _get(url + "/")
+    assert status == 200
+    assert content_type == "text/html; charset=utf-8"
+    assert _get_json(url + "/api/runs/" + RUN_ID)["run_id"] == RUN_ID
 
 
 def test_cli_serve_prints_url_and_exits_zero_on_interrupt(monkeypatch, capsys):
