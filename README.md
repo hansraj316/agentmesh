@@ -153,6 +153,38 @@ running. v0.1 events without span ids still work — they render as a flat
 tree, paired by agent and event order. `--db PATH` points at a different
 event database.
 
+## Annotate runs
+
+Attach operator context to a run — "deploy happened here", "rolled back",
+"investigating" — and see it next to the span tree. An annotation is just an
+AMP `message` event with payload `{"kind": "annotation", "text": ...,
+"author": ...}` (agent `operator`, see [the AMP spec](docs/amp-spec.md)), so
+it flows through the store like any other event:
+
+```bash
+agentmesh annotate my-run-42 "deploy v2.3.1 happened here" --author alice
+# annotated run my-run-42: "deploy v2.3.1 happened here" (alice)
+
+agentmesh trace my-run-42
+```
+
+```
+run my-run-42 — 3 spans, 1 failed, total 4.2s
+└─ orchestrator ✓ 4.1s
+   ├─ researcher ✓ 2.0s
+   └─ writer ✗ 1.3s — ValueError: bad draft
+
+Annotations:
+  2026-06-12T08:00:00.000000+00:00 — deploy v2.3.1 happened here (alice)
+```
+
+`--author NAME` is optional, `--db PATH` points at a different event
+database, and annotating an unknown run is an error — annotations must
+attach to real runs. The serve daemon exposes the same data: a run's
+annotations ride along in `GET /api/runs/<run_id>`, and
+`GET /api/annotations` lists recent annotations across all runs (newest
+first, `?since=ISO` to filter).
+
 ## Track tokens & cost
 
 Call `mesh.record_usage(...)` anywhere inside a decorated agent (sync or
@@ -406,7 +438,8 @@ stops it cleanly.
 |-------|---------|
 | `/` | HTML board (auto-refreshes every 5s) |
 | `/api/agents` | JSON list of agent summaries (one per agent) |
-| `/api/runs/<run_id>` | JSON span tree of one run (404 + JSON error if unknown) |
+| `/api/runs/<run_id>` | JSON span tree of one run (404 + JSON error if unknown; includes `annotations` when the run has any) |
+| `/api/annotations` | JSON list of recent annotations across runs, newest first (`?since=ISO` filters; 400 on a bad value) |
 | `/api/alerts` | JSON webhook payloads for fired alert rules (`[]` with no rules) |
 | `POST /api/events` | Webhook ingestion: accepts one AMP event object or an array of up to 1000 (202 `{"accepted": n, "skipped": m}`) |
 

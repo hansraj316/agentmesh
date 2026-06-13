@@ -9,6 +9,7 @@ Usage::
     agentmesh flaky [--window N] [--since ISO] [--db PATH]
     agentmesh latency [--by agent|model] [--since ISO] [--db PATH]
     agentmesh trace RUN_ID [--db PATH]
+    agentmesh annotate RUN_ID TEXT [--author NAME] [--db PATH]
     agentmesh export-otlp RUN_ID [--db PATH] [--out PATH]
     agentmesh diff RUN_A RUN_B [--db PATH] [--threshold PCT]
     agentmesh alerts [--rules PATH] [--db PATH] [--webhook URL] [--exit-code]
@@ -38,6 +39,7 @@ from agentmesh.alerts import (
     render_alerts_markdown,
     to_webhook_payloads,
 )
+from agentmesh.annotations import add_annotation, annotations_for_run
 from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.config import (
     DEFAULT_PORT,
@@ -261,6 +263,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     trace.add_argument("run_id", help="The run_id to trace.")
     trace.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="Event database path (default: $AGENTMESH_DB or ~/.agentmesh/events.db).",
+    )
+
+    annotate = subparsers.add_parser(
+        "annotate",
+        help='Attach an operator note to a run ("deploy happened here").',
+    )
+    annotate.add_argument("run_id", help="The run_id to annotate.")
+    annotate.add_argument("text", help="The annotation text.")
+    annotate.add_argument(
+        "--author",
+        default=None,
+        metavar="NAME",
+        help="Who wrote the note (stored in the annotation payload).",
+    )
+    annotate.add_argument(
         "--db",
         default=None,
         metavar="PATH",
@@ -537,7 +558,19 @@ def _trace(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
-    print(render_tree(trace))
+    print(render_tree(trace, annotations=annotations_for_run(store, args.run_id)))
+    return 0
+
+
+def _annotate(args: argparse.Namespace) -> int:
+    store = EventStore(args.db) if args.db else EventStore()
+    try:
+        event = add_annotation(store, args.run_id, args.text, author=args.author)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    suffix = " (%s)" % args.author if args.author else ""
+    print('annotated run %s: "%s"%s' % (args.run_id, event.payload["text"], suffix))
     return 0
 
 
@@ -682,6 +715,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _latency(args)
     if args.command == "trace":
         return _trace(args)
+    if args.command == "annotate":
+        return _annotate(args)
     if args.command == "export-otlp":
         return _export_otlp(args)
     if args.command == "diff":

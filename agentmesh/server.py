@@ -9,7 +9,10 @@ GET routes (read-only):
 * ``/`` — the HTML board from ``board.render_html`` with a 5-second
   auto-refresh meta tag injected.
 * ``/api/agents`` — JSON list of agent summaries.
-* ``/api/runs/<run_id>`` — JSON span tree from ``trace.build_trace``.
+* ``/api/runs/<run_id>`` — JSON span tree from ``trace.build_trace``; runs
+  with annotations carry an extra ``annotations`` key (chronological).
+* ``/api/annotations`` — JSON list of recent annotations across runs,
+  newest first; ``?since=ISO`` filters (400 on an unparsable value).
 * ``/api/alerts`` — JSON webhook payloads for fired alert rules.
 
 POST routes (webhook ingestion):
@@ -34,9 +37,10 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional, Type, Union
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from agentmesh.alerts import evaluate, load_rules, to_webhook_payloads
+from agentmesh.annotations import annotations_for_run, annotations_summary
 from agentmesh.board import agent_summaries, render_html
 from agentmesh.events import Event
 from agentmesh.store import EventStore
@@ -113,7 +117,20 @@ def create_handler(db_path: PathLike, rules_path: PathLike = None) -> Type[BaseH
                 except ValueError as exc:
                     self._send_json({"error": str(exc)}, status=404)
                     return
-                self._send_json(asdict(trace))
+                data = asdict(trace)
+                notes = annotations_for_run(store, run_id)
+                if notes:
+                    data["annotations"] = notes
+                self._send_json(data)
+            elif path == "/api/annotations":
+                params = parse_qs(urlsplit(self.path).query)
+                since = params.get("since", [None])[0]
+                try:
+                    summary = annotations_summary(store, since=since)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
+                self._send_json(summary)
             elif path == "/api/alerts":
                 alerts = evaluate(store, load_rules(rules_path))
                 self._send_json(to_webhook_payloads(alerts))
