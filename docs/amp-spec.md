@@ -78,6 +78,25 @@ present key with the wrong type or a negative value makes the event invalid.
 Usage keys on other event types are not defined by this spec and are ignored
 by consumers (payloads stay free-form there).
 
+## Annotations (v0.3 note)
+
+Operator context on runs ("deploy happened here") needs no new event type
+and no version bump: an **annotation** is, by convention, a regular
+`message` event whose payload carries these keys:
+
+| Payload key | Type   | Required | Description |
+|-------------|--------|----------|-------------|
+| `kind`      | string | yes      | Always `"annotation"`. |
+| `text`      | string | yes      | The note itself. Non-empty. |
+| `author`    | string | no       | Who wrote the note. |
+
+The event's `agent` field is `"operator"` by default (producers may choose
+another name). Annotations attach to existing runs via the normal `run_id`
+field. Because every annotation is a valid v0.3 `message` event, stores and
+consumers that don't know the convention simply treat it as a free-form
+message; consumers that do know it (e.g. `agentmesh trace` and the
+`/api/annotations` route) surface annotations alongside the run's spans.
+
 ## Example
 
 ```json

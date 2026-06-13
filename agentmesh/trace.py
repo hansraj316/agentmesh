@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from agentmesh.events import Event, _parse_ts
 from agentmesh.store import EventStore
@@ -175,8 +175,17 @@ def _payload_str(event: Event, key: str) -> Optional[str]:
     return None
 
 
-def render_tree(trace: Trace, now: Optional[datetime] = None) -> str:
-    """Render a trace as an ASCII tree; ``now`` sizes running spans (injectable for tests)."""
+def render_tree(
+    trace: Trace,
+    now: Optional[datetime] = None,
+    annotations: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Render a trace as an ASCII tree; ``now`` sizes running spans (injectable for tests).
+
+    ``annotations`` (dicts with ``ts``, ``text``, and optional ``author``,
+    e.g. from ``annotations.annotations_for_run``) adds an "Annotations:"
+    section after the tree. Without annotations the output is unchanged.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
     lines = [
@@ -189,6 +198,14 @@ def render_tree(trace: Trace, now: Optional[datetime] = None) -> str:
         )
     ]
     _render_spans(trace.roots, "", lines, now)
+    if annotations:
+        lines.append("")
+        lines.append("Annotations:")
+        for note in annotations:
+            line = "  %s — %s" % (note["ts"], note["text"])
+            if note.get("author"):
+                line += " (%s)" % note["author"]
+            lines.append(line)
     return "\n".join(lines)
 
 
