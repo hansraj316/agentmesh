@@ -125,17 +125,28 @@ describe("fold", () => {
     expect(h.duration_seconds).toBe(4);
   });
 
-  it("defaults from to the sending agent and task to the task id", () => {
+  it("needs from and to, and folds a missing task as an empty string", () => {
+    const noFrom = ev({ payload: { kind: "handoff", task_id: "t-9", to: "reviewer", status: "running" } });
+    expect(fold([noFrom])).toEqual([]);
     const [h] = fold([
-      ev({ agent: "coder", payload: { kind: "handoff", task_id: "t-9", to: "reviewer", status: "running" } }),
+      ev({ payload: { kind: "handoff", task_id: "t-9", from: "coder", to: "reviewer", status: "running" } }),
     ]);
-    expect(h.from).toBe("coder");
-    expect(h.task).toBe("t-9");
+    expect(h.task).toBe("");
+  });
+
+  it("takes started_at from an open that arrives after its close", () => {
+    const [h] = fold([
+      handoff("done", {}, "2026-11-02T10:00:10.000Z"),
+      handoff("running", {}, "2026-11-02T10:00:04.000Z"),
+    ]);
+    expect(h.status).toBe("done");
+    expect(h.started_at).toBe("2026-11-02T10:00:04.000Z");
+    expect(h.duration_seconds).toBe(6);
   });
 
   it("orders handoffs newest first", () => {
     const mk = (task_id: string, ts: string) =>
-      ev({ ts, payload: { kind: "handoff", task_id, task: task_id, to: "coder", status: "running" } });
+      ev({ ts, payload: { kind: "handoff", task_id, task: task_id, from: "planner", to: "coder", status: "running" } });
     const out = fold([
       mk("a", "2026-11-02T10:00:00.000Z"),
       mk("c", "2026-11-02T10:02:00.000Z"),

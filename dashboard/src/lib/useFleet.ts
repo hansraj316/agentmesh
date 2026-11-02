@@ -42,7 +42,7 @@ export function useFleet(backend: Backend): FleetState {
     return backend.subscribe(onEvents, setConnection);
   }, [backend]);
 
-  const handoffs = useMemo(() => sortHandoffs(map.values()), [map]);
+  const handoffs = useMemo(() => sortHandoffs(map), [map]);
   const runs = useMemo(
     () => Array.from(runOrder.current.keys()).reverse(),
     [runVersions],
