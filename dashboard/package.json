@@ -1,0 +1,30 @@
+{
+  "name": "agentmesh-dashboard",
+  "version": "0.1.0",
+  "description": "AgentMesh live dashboard: Handoffs, Agents and Run views over the daemon's SSE stream.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "dev:mock": "vite --mode mock",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.3.0",
+    "@types/react": "18.3.23",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "26.1.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vitest": "4.1.8"
+  }
+}
