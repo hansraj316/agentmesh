@@ -76,8 +76,8 @@ def serve_url(db_path, seeded):
     """Factory starting a server on a free port; all servers stop in teardown."""
     started = []
 
-    def start(rules_path=None):
-        server = create_server(db_path, 0, rules_path=rules_path)
+    def start(rules_path=None, static_dir=None):
+        server = create_server(db_path, 0, rules_path=rules_path, static_dir=static_dir)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         started.append((server, thread))
@@ -242,3 +242,219 @@ def test_cli_serve_prints_url_and_exits_zero_on_interrupt(monkeypatch, capsys):
     assert main(["serve", "--port", "7878"]) == 0
     assert "agentmesh board at http://127.0.0.1:7878/" in capsys.readouterr().out
     assert calls == [(None, 7878, None)]
+
+
+# --- GET /api/events (paged read of the stream contract) -------------------
+
+
+def test_get_events_returns_stored_events_with_row_ids(serve_url, db_path):
+    data = _get_json(serve_url() + "/api/events")
+    stored = EventStore(db_path).events_after(0)
+    assert [item["id"] for item in data] == [row_id for row_id, _ in stored]
+    assert [item["event_id"] for item in data] == [event.event_id for _, event in stored]
+    first = data[0]
+    assert set(first) == {"id", "event_id", "run_id", "agent", "type", "ts", "payload"}
+    assert first["payload"] == {"span_id": "sp-root"}
+
+
+def test_get_events_pages_with_after_and_limit(serve_url, db_path):
+    ids = [row_id for row_id, _ in EventStore(db_path).events_after(0)]
+    url = serve_url() + "/api/events"
+    page = _get_json(url + "?after=%d&limit=2" % ids[0])
+    assert [item["id"] for item in page] == ids[1:3]
+    assert _get_json(url + "?after=%d" % ids[-1]) == []
+
+
+def test_get_events_default_and_max_limit(serve_url, store):
+    for i in range(1205):
+        store.append(Event.new("run-many", "bulk", "message", {"i": i}))
+    url = serve_url() + "/api/events"
+    assert len(_get_json(url)) == 200
+    assert len(_get_json(url + "?limit=5000")) == 1000
+
+
+@pytest.mark.parametrize("query", ["after=x", "after=-1", "limit=0", "limit=ten"])
+def test_get_events_bad_params_are_400(serve_url, query):
+    data = _get_json(serve_url() + "/api/events?" + query, expected_status=400)
+    assert "must be" in data["error"]
+
+
+# --- GET /api/runs ----------------------------------------------------------
+
+
+def test_api_runs_lists_recent_runs_newest_first(serve_url, store):
+    store.append(Event.new("run-live", "coder", "agent_start", {"span_id": "sp-c"}))
+    store.append(Event.new("run-msgs", "planner", "message", {"text": "hi"}))
+    data = _get_json(serve_url() + "/api/runs")
+    assert [run["run_id"] for run in data] == ["run-msgs", "run-live", RUN_ID]
+    by_id = {run["run_id"]: run for run in data}
+
+    seeded = by_id[RUN_ID]
+    assert set(seeded) == {
+        "run_id",
+        "started_at",
+        "ended_at",
+        "status",
+        "span_count",
+        "failed_count",
+        "event_count",
+    }
+    assert seeded["status"] == "failed"
+    assert seeded["span_count"] == 2
+    assert seeded["failed_count"] == 1
+    assert seeded["event_count"] == 4
+    assert seeded["started_at"] <= seeded["ended_at"]
+
+    live = by_id["run-live"]
+    assert live["status"] == "running"
+    assert live["ended_at"] is None
+    assert live["span_count"] == 1
+
+    msgs = by_id["run-msgs"]
+    assert msgs["status"] == "ok"
+    assert msgs["span_count"] == 0
+    assert msgs["ended_at"] == msgs["started_at"]
+
+
+def test_api_runs_limit(serve_url, store):
+    for i in range(3):
+        store.append(Event.new("run-%d" % i, "a", "message", {}))
+    url = serve_url() + "/api/runs"
+    assert [run["run_id"] for run in _get_json(url + "?limit=2")] == ["run-2", "run-1"]
+    assert "must be" in _get_json(url + "?limit=0", expected_status=400)["error"]
+
+
+def test_api_runs_empty_store_is_empty_list(tmp_path):
+    server = create_server(tmp_path / "empty.db", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = "http://127.0.0.1:%d/api/runs" % server.server_address[1]
+        assert _get_json(url) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_api_run_detail_route_unchanged_next_to_runs_list(serve_url):
+    url = serve_url()
+    assert isinstance(_get_json(url + "/api/runs"), list)
+    assert _get_json(url + "/api/runs/" + RUN_ID)["run_id"] == RUN_ID
+
+
+# --- /app/ static dashboard hosting -----------------------------------------
+
+
+@pytest.fixture
+def bundle(tmp_path):
+    """A fake built dashboard: index.html, a hashed asset and a favicon."""
+    root = tmp_path / "app"
+    (root / "assets").mkdir(parents=True)
+    (root / "index.html").write_text(
+        '<!doctype html><div id="root"></div><script src="/app/assets/index-abc.js"></script>',
+        encoding="utf-8",
+    )
+    (root / "assets" / "index-abc.js").write_text("console.log('mesh')", encoding="utf-8")
+    (root / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("outside the bundle", encoding="utf-8")
+    return root
+
+
+def _get_headers(url):
+    try:
+        with urllib.request.urlopen(url) as response:
+            return response.getcode(), response.headers, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+
+
+def test_app_serves_index_html(serve_url, bundle):
+    status, headers, body = _get_headers(serve_url(static_dir=bundle) + "/app/")
+    assert status == 200
+    assert headers["Content-Type"] == "text/html; charset=utf-8"
+    assert headers["Cache-Control"] == "no-cache"
+    assert b'<div id="root">' in body
+
+
+def test_app_without_slash_redirects_to_slash(serve_url, bundle):
+    status, headers, body = _get_headers(serve_url(static_dir=bundle) + "/app")
+    # urllib follows the 301, so we land on the index page
+    assert status == 200
+    assert b'<div id="root">' in body
+
+
+def test_app_serves_assets_with_types_and_caching(serve_url, bundle):
+    url = serve_url(static_dir=bundle)
+    status, headers, body = _get_headers(url + "/app/assets/index-abc.js")
+    assert status == 200
+    assert headers["Content-Type"] == "text/javascript; charset=utf-8"
+    assert "immutable" in headers["Cache-Control"]
+    assert body == b"console.log('mesh')"
+    status, headers, _ = _get_headers(url + "/app/favicon.svg")
+    assert status == 200
+    assert headers["Content-Type"] == "image/svg+xml"
+    assert headers["Cache-Control"] == "no-cache"
+
+
+def test_app_client_routes_fall_back_to_index(serve_url, bundle):
+    url = serve_url(static_dir=bundle)
+    for route in ("/app/handoffs", "/app/runs/fleet-0007"):
+        status, headers, body = _get_headers(url + route)
+        assert status == 200, route
+        assert b'<div id="root">' in body
+
+
+def test_app_missing_asset_is_404_not_index(serve_url, bundle):
+    data = _get_json(serve_url(static_dir=bundle) + "/app/assets/gone.js", expected_status=404)
+    assert "gone.js" in data["error"]
+
+
+def test_app_blocks_path_traversal(serve_url, bundle):
+    url = serve_url(static_dir=bundle)
+    for path in (
+        "/app/../secret.txt",
+        "/app/%2e%2e/secret.txt",
+        "/app/assets/%2e%2e/%2e%2e/secret.txt",
+    ):
+        status, _, body = _get_headers(url + path)
+        assert b"outside the bundle" not in body, path
+        assert status in (200, 404), path
+
+
+def test_app_missing_bundle_explains_how_to_build(serve_url, tmp_path):
+    status, headers, body = _get_headers(serve_url(static_dir=tmp_path / "nope") + "/app/")
+    assert status == 404
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert b"npm run build" in body
+    assert b"dashboard bundle not found" in body
+
+
+def test_app_does_not_shadow_api_or_board(serve_url, bundle):
+    url = serve_url(static_dir=bundle)
+    assert _get(url + "/")[0] == 200
+    assert isinstance(_get_json(url + "/api/agents"), list)
+    assert "/apples" in _get_json(url + "/apples", expected_status=404)["error"]
+
+
+# --- dev-mode CORS ----------------------------------------------------------
+
+
+def test_no_cors_header_by_default(serve_url):
+    status, headers, _ = _get_headers(serve_url() + "/api/agents")
+    assert status == 200
+    assert headers["Access-Control-Allow-Origin"] is None
+
+
+def test_cors_header_for_vite_in_dev_mode(serve_url, monkeypatch):
+    monkeypatch.setenv("AGENTMESH_DEV", "1")
+    url = serve_url()
+    for path in ("/api/agents", "/api/events", "/api/runs", "/nope"):
+        _, headers, _ = _get_headers(url + path)
+        assert headers["Access-Control-Allow-Origin"] == "http://localhost:5173", path
+
+
+def test_cors_only_for_exact_dev_flag(serve_url, monkeypatch):
+    monkeypatch.setenv("AGENTMESH_DEV", "true")
+    _, headers, _ = _get_headers(serve_url() + "/api/agents")
+    assert headers["Access-Control-Allow-Origin"] is None
