@@ -1,5 +1,6 @@
 """AgentMesh Python SDK: ``@mesh.agent`` decorator, ``mesh.run`` grouping,
-and ``mesh.record_usage`` token/cost accounting."""
+``mesh.record_usage`` token/cost accounting, and ``mesh.handoff`` task
+handoffs between agents (AMP v0.4)."""
 
 import contextvars
 import functools
@@ -8,9 +9,11 @@ import time
 import uuid
 import warnings
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Optional, TypeVar
+from types import TracebackType
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Type, TypeVar
 
 from agentmesh.events import Event
+from agentmesh.handoffs import HANDOFF_KIND
 from agentmesh.store import EventStore
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -25,6 +28,13 @@ _current_span_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
 
 _current_usage: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
     "agentmesh_usage", default=None
+)
+
+
+# (agent name, span fields) of the innermost running @mesh.agent call. Lets
+# mesh.handoff default its sender and link itself to the enclosing span.
+_current_agent: contextvars.ContextVar[Optional[Tuple[str, Dict[str, str]]]] = (
+    contextvars.ContextVar("agentmesh_agent", default=None)
 )
 
 
@@ -99,6 +109,35 @@ class Mesh:
         if model is not None:
             usage["model"] = model
 
+    def handoff(
+        self,
+        task: str,
+        to: str,
+        task_id: Optional[str] = None,
+        from_: Optional[str] = None,
+    ) -> "Handoff":
+        """Record one agent handing ``task`` to agent ``to`` (AMP v0.4).
+
+        Use as a sync or async context manager; it yields the ``task_id``::
+
+            with mesh.handoff("Add retry to GitHub sync", to="coder") as task_id:
+                coder(task)
+
+        Emits a ``message`` event with a ``handoff`` payload and status
+        ``running`` on enter, then ``done`` (with ``duration_ms``) on clean
+        exit or ``failed`` (with ``duration_ms``, the first line of the error
+        as ``error``, and ``error_type``) if the block raises; the exception
+        is re-raised unchanged. Both events share the ``task_id`` and are
+        emitted by the sender: ``from_`` if given, else the innermost running
+        ``@mesh.agent`` (ValueError on enter if there is neither).
+
+        ``task_id`` defaults to a fresh ``t-`` id. The events join the
+        current ``mesh.run`` (or a fresh run_id). Inside a decorated agent
+        they also carry that agent's ``span_id`` and ``parent_span_id``,
+        like ``tool_call`` events; a handoff does not open a span itself.
+        """
+        return Handoff(self, task=task, to=to, task_id=task_id, from_=from_)
+
     def agent(self, name: str) -> Callable[[F], F]:
         """Instrument a sync or async callable as a named agent.
 
@@ -154,6 +193,7 @@ class Mesh:
                     usage: Dict[str, Any] = {}
                     token = _current_span_id.set(span["span_id"])
                     usage_token = _current_usage.set(usage)
+                    agent_token = _current_agent.set((name, span))
                     try:
                         started = _start(run_id, span)
                         try:
@@ -164,6 +204,7 @@ class Mesh:
                         _end(run_id, started, span, usage)
                         return result
                     finally:
+                        _current_agent.reset(agent_token)
                         _current_usage.reset(usage_token)
                         _current_span_id.reset(token)
 
@@ -176,6 +217,7 @@ class Mesh:
                 usage: Dict[str, Any] = {}
                 token = _current_span_id.set(span["span_id"])
                 usage_token = _current_usage.set(usage)
+                agent_token = _current_agent.set((name, span))
                 try:
                     started = _start(run_id, span)
                     try:
@@ -186,12 +228,122 @@ class Mesh:
                     _end(run_id, started, span, usage)
                     return result
                 finally:
+                    _current_agent.reset(agent_token)
                     _current_usage.reset(usage_token)
                     _current_span_id.reset(token)
 
             return sync_wrapper  # type: ignore[return-value]
 
         return decorator
+
+
+def _first_line(text: str) -> str:
+    lines = text.strip().splitlines()
+    return lines[0] if lines else ""
+
+
+class Handoff:
+    """Context manager returned by :meth:`Mesh.handoff`; one use per instance."""
+
+    def __init__(
+        self,
+        mesh: Mesh,
+        task: str,
+        to: str,
+        task_id: Optional[str] = None,
+        from_: Optional[str] = None,
+    ) -> None:
+        for label, value in (("task", task), ("to", to)):
+            if not isinstance(value, str) or not value:
+                raise ValueError("%s must be a non-empty string, got %r" % (label, value))
+        for label, value in (("task_id", task_id), ("from_", from_)):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(
+                    "%s must be a non-empty string when given, got %r" % (label, value)
+                )
+        self._mesh = mesh
+        self.task = task
+        self.to = to
+        self.task_id = task_id if task_id is not None else "t-" + uuid.uuid4().hex[:12]
+        self._from = from_
+        self._run_id: Optional[str] = None
+        self._started: Optional[float] = None
+        self._payload: Dict[str, Any] = {}
+
+    @property
+    def from_(self) -> Optional[str]:
+        """The sender, once resolved (on enter) or as given."""
+        return self._from
+
+    @property
+    def run_id(self) -> Optional[str]:
+        """The run the handoff events belong to, once entered."""
+        return self._run_id
+
+    def _open(self) -> str:
+        if self._started is not None:
+            raise RuntimeError("a mesh.handoff(...) context can only be entered once")
+        current = _current_agent.get()
+        sender = self._from if self._from is not None else (current[0] if current else None)
+        if sender is None:
+            raise ValueError(
+                "mesh.handoff() needs from_=... when used outside any @mesh.agent call"
+            )
+        self._from = sender
+        self._run_id = _current_run_id.get() or str(uuid.uuid4())
+        payload: Dict[str, Any] = {
+            "kind": HANDOFF_KIND,
+            "task_id": self.task_id,
+            "task": self.task,
+            "from": sender,
+            "to": self.to,
+        }
+        if current is not None:
+            payload.update(current[1])
+        self._payload = payload
+        self._emit({"status": "running"})
+        self._started = time.perf_counter()
+        return self.task_id
+
+    def _close(self, exc: Optional[BaseException]) -> None:
+        started = self._started if self._started is not None else time.perf_counter()
+        extra: Dict[str, Any] = {"duration_ms": (time.perf_counter() - started) * 1000.0}
+        if exc is None:
+            extra["status"] = "done"
+        else:
+            extra["status"] = "failed"
+            extra["error"] = _first_line(str(exc)) or type(exc).__name__
+            extra["error_type"] = type(exc).__name__
+        self._emit(extra)
+
+    def _emit(self, extra: Dict[str, Any]) -> None:
+        payload = dict(self._payload)
+        payload.update(extra)
+        self._mesh._emit(str(self._run_id), str(self._from), "message", payload)
+
+    def __enter__(self) -> str:
+        return self._open()
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> bool:
+        self._close(exc)
+        return False
+
+    async def __aenter__(self) -> str:
+        return self._open()
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> bool:
+        self._close(exc)
+        return False
 
 
 mesh = Mesh()
