@@ -1,4 +1,4 @@
-# AMP — AgentMesh Protocol v0.3
+# AMP — AgentMesh Protocol v0.4
 
 **Status:** Stable draft
 **Format:** JSON
@@ -10,7 +10,10 @@ AMP event.
 v0.2 is backward compatible with v0.1: it only adds the optional `span_id` and
 `parent_span_id` payload fields (see [Spans](#spans-v02)). v0.3 is backward
 compatible with v0.2: it only adds the optional usage payload fields (see
-[Usage](#usage-v03)). Every valid v0.1 or v0.2 event is a valid v0.3 event.
+[Usage](#usage-v03)). v0.4 is backward compatible with v0.3: it adds no event
+type and no envelope field, only the [handoff](#handoffs-v04) payload
+convention on `message` events. Every valid v0.1, v0.2 or v0.3 event is a
+valid v0.4 event, and every handoff event is a valid v0.3 `message` event.
 
 ## Event Envelope
 
@@ -25,7 +28,7 @@ Every event is a single JSON object with exactly these fields:
 | `ts`       | string | yes      | Event time, ISO-8601 in UTC (e.g. `2026-06-10T08:15:30.123456+00:00`; a trailing `Z` is also accepted). |
 | `payload`  | object | yes      | Type-specific data. Must be a JSON object; may be empty (`{}`). |
 
-No other top-level fields are defined in v0.3. Consumers MUST ignore unknown
+No other top-level fields are defined in v0.4. Consumers MUST ignore unknown
 top-level fields to stay forward-compatible.
 
 ## Event Types
@@ -97,6 +100,76 @@ consumers that don't know the convention simply treat it as a free-form
 message; consumers that do know it (e.g. `agentmesh trace` and the
 `/api/annotations` route) surface annotations alongside the run's spans.
 
+## Handoffs (v0.4)
+
+A **handoff** is one agent passing a task to another ("Planner hands *Add
+retry to GitHub sync* to Coder"). Like annotations it needs no new event
+type: a handoff is a pair of regular `message` events that share a
+`task_id`. The event's `agent` is the **sender**.
+
+```json
+{"type": "message", "agent": "planner", "run_id": "fleet-0007",
+ "payload": {"kind": "handoff", "task_id": "t-3f2a", "task": "Add retry to GitHub sync",
+             "from": "planner", "to": "coder", "status": "running"}}
+
+{"type": "message", "agent": "planner", "run_id": "fleet-0007",
+ "payload": {"kind": "handoff", "task_id": "t-3f2a", "task": "Add retry to GitHub sync",
+             "from": "planner", "to": "coder", "status": "done", "duration_ms": 23140}}
+```
+
+(Envelope fields `event_id` and `ts` omitted for brevity.)
+
+| Payload key      | Type   | Required | Description |
+|------------------|--------|----------|-------------|
+| `kind`           | string | yes      | Always `"handoff"`. |
+| `task_id`        | string | yes      | Identifies the handoff. Unique within a run; the open and close events share it. Non-empty. |
+| `task`           | string | yes      | What is being handed over, in plain words. |
+| `from`           | string | yes      | The sending agent. Equals the event's `agent`. Non-empty. |
+| `to`             | string | yes      | The receiving agent. Non-empty. |
+| `status`         | string | yes      | `running` on the open event; `done` or `failed` on the close event. |
+| `duration_ms`    | number | no       | On close: time from open to close in milliseconds. ≥ 0. |
+| `error`          | string | no       | On `failed`: the first line of the failure message. |
+| `error_type`     | string | no       | On `failed`: the exception class name, when there is one. |
+| `span_id`        | string | no       | The enclosing agent invocation's span, when the handoff happens inside one (same meaning as on `tool_call`). A handoff does not open a span of its own. |
+| `parent_span_id` | string | no       | That enclosing span's parent, if any. |
+
+### Lifecycle
+
+1. The sender emits the open event (`status: "running"`) when it hands the
+   task over.
+2. When the handed-over work finishes, the sender emits exactly one close
+   event with the same `run_id` and `task_id`: `status: "done"`, or
+   `status: "failed"` with `error`.
+
+### Folding
+
+Consumers fold handoff events into one record per (`run_id`, `task_id`)
+with these fields:
+
+| Field              | Description |
+|--------------------|-------------|
+| `task_id`, `run_id`, `task`, `from`, `to` | From the events. |
+| `status`           | `running` until a close arrives, then `done` or `failed`. |
+| `started_at`       | `ts` of the open event. |
+| `ended_at`         | `ts` of the close event; `null` while still running. |
+| `duration_seconds` | The close's `duration_ms` / 1000 when present, else `ended_at` − `started_at`; `null` while running. |
+| `error`            | The close's `error` on `failed`, else `null`. |
+
+Folding rules, so every consumer shows the same thing:
+
+- An open with no close is shown as `running` (`ended_at: null`).
+- A close with no open still folds; `started_at` is back-computed from
+  `duration_ms` (or equals `ended_at` without it). A later open replaces
+  the back-computed `started_at`.
+- The first close wins; later closes for the same task are ignored.
+- Events whose payload lacks `kind: "handoff"`, a non-empty `task_id`,
+  `from` and `to`, or a known `status` are not handoffs and are treated as
+  ordinary messages.
+
+The Python SDK emits handoffs with `mesh.handoff(task, to=...)`, a sync and
+async context manager; `agentmesh.handoffs.fold` implements the rules above
+and `agentmesh handoffs` lists them.
+
 ## Example
 
 ```json
@@ -132,3 +205,7 @@ An event is valid iff:
    `output_tokens` are non-negative integers, `cost_usd` is a non-negative
    number, and `model` is a non-empty string. Absent usage keys are always
    fine — v0.1/v0.2 events validate unchanged.
+
+The handoff convention (v0.4) adds no validation rule: a malformed handoff
+payload is still a valid `message` event, and consumers simply don't treat
+it as a handoff (see [Folding](#folding)).
