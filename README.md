@@ -33,6 +33,18 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 └─────────────────────────────────────────┘
 ```
 
+## See it in action
+
+<p align="center">
+  <img src="docs/media/agentmesh-handoff.svg" width="480" alt="AgentMesh Handoffs view: the planner hands &quot;Add retry to GitHub sync&quot; to the coder, the row runs with a timer, then turns Done at 23 seconds">
+</p>
+
+The planner hands **Add retry to GitHub sync** to the coder. The new handoff
+lands at the top of the fleet's trace, runs while its timer counts, then turns
+Done at 23 seconds. It previews the handoff view AgentMesh is building toward
+(see the 2026-04-28 delivery update at the bottom), so read it as a design loop
+rather than a screenshot of today's board. The same scene plays on the AgentMesh card in my [portfolio](https://hansraj-portfolio-five.vercel.app/#artefacts).
+
 ## Try it in 30 seconds
 
 No agents required — `agentmesh demo` seeds a realistic multi-agent dataset
