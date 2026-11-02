@@ -404,3 +404,26 @@ def test_existing_commands_read_fleet_data(db_path, store, capsys):
     assert "reviewer" in capsys.readouterr().out
     assert cli.main(["board", "--db", str(db_path)]) == 0
     assert "coder" in capsys.readouterr().out
+
+
+def test_fleet_handoffs_fold_with_the_sdk_reader(store):
+    from agentmesh.handoffs import fold, list_handoffs
+
+    llm = quiet_llm(seed=6, fail_on="Handle 429 rate limits in ingest-gha")
+    summary = run_fleet(store, llm=llm, goal="Make GitHub ingestion reliable")
+    events = events_for(store, summary.run_id)
+
+    folded = fold(events)
+    assert len(folded) == len(pairs_by_task_id(events))
+    assert all(h.run_id == summary.run_id for h in folded)
+    assert all(h.ended_at is not None for h in folded)
+    failed = [h for h in folded if h.status == "failed"]
+    assert [(h.task, h.from_, h.to) for h in failed] == [
+        ("Handle 429 rate limits in ingest-gha", "planner", "coder")
+    ]
+    assert failed[0].error.startswith("RateLimitError")
+    closed = [e for e in handoffs(events) if e.payload["status"] == "failed"][0]
+    assert closed.payload["error_type"] == "LLMError"
+
+    listed = list_handoffs(store, run_id=summary.run_id, limit=100)
+    assert {h.task_id for h in listed} == {h.task_id for h in folded}

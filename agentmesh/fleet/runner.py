@@ -10,15 +10,13 @@ so the Handoffs, Agents, cost and latency views all have live data.
 import random
 import sys
 import threading
-import time
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from agentmesh.fleet.backlog import GOALS
 from agentmesh.fleet.llm import LLMError, ScriptedLLM
-from agentmesh.sdk import Mesh, _current_span_id
+from agentmesh.sdk import Mesh
 from agentmesh.store import EventStore
 
 MAX_TASKS = 4
@@ -37,54 +35,14 @@ class RunSummary:
     stopped_early: bool = False
 
 
-def _new_task_id() -> str:
-    return "t-" + uuid.uuid4().hex[:8]
-
-
 def _first_line(text: str) -> str:
     lines = str(text).strip().splitlines()
     return lines[0] if lines else ""
 
 
-@contextmanager
-def _handoff_events(
-    mesh: Mesh, task: str, to: str, from_: str, task_id: str
-) -> Iterator[Dict[str, Any]]:
-    """Emit the AMP v0.4 handoff pair exactly as the build plan's contract
-    describes. Only used while ``Mesh.handoff`` (P1) is not available."""
-    run_id = mesh.current_run_id() or str(uuid.uuid4())
-    base: Dict[str, Any] = {
-        "kind": "handoff",
-        "task_id": task_id,
-        "task": task,
-        "from": from_,
-        "to": to,
-    }
-    span_id = _current_span_id.get()
-    if span_id is not None:
-        base["span_id"] = span_id
-    mesh._emit(run_id, from_, "message", dict(base, status="running"))
-    started = time.perf_counter()
-    try:
-        yield base
-    except BaseException as exc:
-        payload = dict(base, status="failed")
-        payload["duration_ms"] = (time.perf_counter() - started) * 1000.0
-        payload["error"] = _first_line(exc) or type(exc).__name__
-        mesh._emit(run_id, from_, "message", payload)
-        raise
-    payload = dict(base, status="done")
-    payload["duration_ms"] = (time.perf_counter() - started) * 1000.0
-    mesh._emit(run_id, from_, "message", payload)
-
-
 def _handoff(mesh: Mesh, task: str, to: str, from_: str) -> Any:
-    """Open a handoff through the SDK, or the local stand-in before P1 lands."""
-    task_id = _new_task_id()
-    sdk_handoff = getattr(mesh, "handoff", None)
-    if sdk_handoff is not None:
-        return sdk_handoff(task, to, task_id=task_id, from_=from_)
-    return _handoff_events(mesh, task, to, from_, task_id)
+    """Open an AMP v0.4 handoff from ``from_`` to ``to`` (sync context manager)."""
+    return mesh.handoff(task, to, from_=from_)
 
 
 def _parse_tasks(text: str) -> List[str]:
