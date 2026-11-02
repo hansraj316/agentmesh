@@ -27,8 +27,12 @@ Homepage = "https://github.com/hansraj316/agentmesh"
 [project.scripts]
 agentmesh = "agentmesh.cli:main"
 
-[tool.setuptools]
-packages = ["agentmesh"]
+[tool.setuptools.packages.find]
+include = ["agentmesh", "agentmesh.*"]
+
+[tool.setuptools.package-data]
+# The committed dashboard bundle served at /app/ (built from dashboard/).
+agentmesh = ["static/app/*.html", "static/app/assets/*"]
 
 [tool.ruff]
 line-length = 100
