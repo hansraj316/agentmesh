@@ -62,3 +62,28 @@ def test_unknown_command_exits_nonzero(db_path):
     with pytest.raises(SystemExit) as excinfo:
         main(["bogus"])
     assert excinfo.value.code != 0
+
+
+@pytest.mark.parametrize("command", ["handoffs", "fleet", "up"])
+def test_end_to_end_commands_are_registered(command, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([command, "--help"])
+    assert exc.value.code == 0
+    assert "usage: agentmesh %s" % command in capsys.readouterr().out
+
+
+def test_fleet_once_then_handoffs(db_path, capsys, monkeypatch):
+    from agentmesh.fleet import llm as fleet_llm
+
+    real = fleet_llm.make_llm
+
+    def fast(kind="scripted", seed=None):
+        model = real(kind, seed=seed)
+        model.delay_s = (0, 0)
+        return model
+
+    monkeypatch.setattr("agentmesh.fleet.cli.make_llm", fast)
+    assert main(["fleet", "--once", "--seed", "3", "--db", str(db_path)]) == 0
+    assert "fleet-" in capsys.readouterr().out
+    assert main(["handoffs", "--db", str(db_path)]) == 0
+    assert "planner" in capsys.readouterr().out

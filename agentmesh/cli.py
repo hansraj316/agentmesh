@@ -19,6 +19,9 @@ Usage::
     agentmesh prune --older-than 30d [--db PATH] [--dry-run]
     agentmesh demo [--db PATH] [--fresh]
     agentmesh config [--config PATH]
+    agentmesh handoffs [--run ID] [-n N] [--follow] [--db PATH]
+    agentmesh fleet [--once] [--llm scripted|claude] [--seed N] [--interval S] [--db PATH]
+    agentmesh up [--port N] [--db PATH] [--llm scripted|claude] [--seed N] [--no-browser]
 
 A global ``--config PATH`` flag (before the subcommand) points at a JSON
 config file that supplies defaults for repeated flags; see agentmesh.config.
@@ -39,6 +42,9 @@ from agentmesh.alerts import (
     render_alerts_markdown,
     to_webhook_payloads,
 )
+from agentmesh import fleet as fleet_cli
+from agentmesh import handoffs as handoffs_cli
+from agentmesh import up as up_cli
 from agentmesh.annotations import add_annotation, annotations_for_run
 from agentmesh.board import agent_summaries, render_html, render_markdown
 from agentmesh.config import (
@@ -444,6 +450,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Delete an existing demo database and reseed from scratch.",
     )
 
+    handoffs_cli.add_cli(subparsers)
+    fleet_cli.add_cli(subparsers)
+    up_cli.add_cli(subparsers)
+
     config_cmd = subparsers.add_parser(
         "config",
         help="Show the effective configuration and where each value comes from.",
@@ -733,6 +743,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _prune(args)
     if args.command == "demo":
         return _demo(args)
+    if args.command == "fleet":
+        return args.handler(args)
+    if args.command in ("handoffs", "up"):
+        return args.func(args)
     return 2
 
 

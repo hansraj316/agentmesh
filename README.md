@@ -5,7 +5,7 @@
 [![Indian Avengers](https://img.shields.io/badge/Managed%20By-Indian%20Avengers-orange?style=flat-square&logo=gitbook)](https://github.com/hansraj316/mission-control-openclaw)
 [![Status](https://img.shields.io/badge/Status-Sentinel%20Audited-green?style=flat-square)](https://github.com/hansraj316/agentmesh)
 
-**Status:** Early design phase — contributions and feedback welcome.
+**Status:** Alpha. `agentmesh up` runs the whole loop end to end; contributions and feedback welcome.
 
 ## The Mission
 
@@ -23,9 +23,9 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 ┌─────────────────────────────────────────┐
 │  AgentMesh Cloud  (hosted, coming soon)  │
 ├─────────────────────────────────────────┤
-│  AgentMesh Dashboard  (React, localhost) │  ← live agent graph
+│  AgentMesh Dashboard  (React, /app/)     │  ← live handoffs
 ├─────────────────────────────────────────┤
-│  AgentMesh Daemon  (FastAPI + SQLite)    │  ← event store
+│  AgentMesh Daemon  (stdlib + SSE)        │  ← event store + live stream
 ├─────────────────────────────────────────┤
 │  AgentMesh SDK  (Python + TypeScript)    │  ← zero-friction instrumentation
 ├─────────────────────────────────────────┤
@@ -41,9 +41,58 @@ AgentMesh is an open-source observability and coordination layer for multi-agent
 
 The planner hands **Add retry to GitHub sync** to the coder. The new handoff
 lands at the top of the fleet's trace, runs while its timer counts, then turns
-Done at 23 seconds. It previews the handoff view AgentMesh is building toward
-(see the 2026-04-28 delivery update at the bottom), so read it as a design loop
-rather than a screenshot of today's board. The same scene plays on the AgentMesh card in my [portfolio](https://hansraj-portfolio-five.vercel.app/#artefacts).
+Done at 23 seconds. Run `agentmesh up` and the same Handoffs view runs live in
+your browser against a real Planner, Coder and Reviewer fleet (see
+[Run it end to end](#run-it-end-to-end)). The same scene plays on the AgentMesh card in my [portfolio](https://hansraj-portfolio-five.vercel.app/#artefacts).
+
+## Run it end to end
+
+One command starts the daemon, a small example fleet (Planner, Coder and
+Reviewer agents handing repo tasks to each other), and the live dashboard,
+all against one event store:
+
+```bash
+git clone https://github.com/hansraj316/agentmesh && cd agentmesh
+pip install -e .  # Python 3.9+, no runtime dependencies, no Node needed
+agentmesh up
+```
+
+```
+AgentMesh is up (Ctrl-C to stop)
+  dashboard  http://127.0.0.1:7777/app/
+  board      http://127.0.0.1:7777/
+  events     ~/.agentmesh/events.db
+  fleet      planner -> coder -> reviewer (scripted model)
+  run fleet-9f0e3f62  Cut alert noise: 1 done, 1 failed, 1 sent back by review
+```
+
+Your browser opens the dashboard at `/app/`:
+
+- **Handoffs**: every agent-to-agent handoff, newest first. A new one drops in
+  as Running with a ticking timer, then settles to Done or Failed.
+- **Agents**: the fleet board (status, streak, errors, p95, cost), updating live.
+- **Run drawer**: click a handoff to see its run's span tree, usage and annotations.
+
+The fleet runs offline on a scripted model by default (realistic delays, an
+occasional failure and review send-back, `--seed N` for repeatable runs). To
+have the agents call Claude instead, set `ANTHROPIC_API_KEY` and run
+`agentmesh up --llm claude`. Other flags: `--port N`, `--db PATH`,
+`--interval SECONDS` between runs, and `--no-browser`.
+
+The same data is in the terminal:
+
+```bash
+agentmesh handoffs              # newest handoffs as a table (--follow to stream)
+agentmesh fleet --once          # run one goal through the fleet without the daemon
+agentmesh trace <run_id>        # span tree of one fleet run
+```
+
+Handoffs are plain AMP `message` events with `kind: "handoff"`
+([AMP v0.4](docs/amp-spec.md)). Record your own with
+`with mesh.handoff("Add retry to GitHub sync", to="coder"):` inside a
+decorated agent, and they show up in the same views. The dashboard's source is
+in [`dashboard/`](dashboard/README.md); the build plan behind all of this is
+[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
 
 ## Try it in 30 seconds
 
@@ -77,7 +126,8 @@ db otherwise), or `--db PATH` to put it elsewhere.
 ## Quick Start
 
 The Python SDK, SQLite event store, and `agentmesh tail` CLI work today
-([AMP v0.3 spec](docs/amp-spec.md)). The daemon and dashboard are still future work.
+([AMP v0.4 spec](docs/amp-spec.md)), and so do the daemon and live dashboard
+(see [Run it end to end](#run-it-end-to-end)).
 
 Decorate any sync or async callable — `agent_start`, `agent_end` (with duration),
 and `agent_error` events are recorded automatically:
@@ -449,6 +499,10 @@ stops it cleanly.
 | Route | Returns |
 |-------|---------|
 | `/` | HTML board (auto-refreshes every 5s) |
+| `/app/` | Live React dashboard (Handoffs, Agents, Run drawer) from the committed bundle |
+| `/api/stream` | Server-Sent Events: every stored event as it lands (`?after=<id>` or `Last-Event-ID` to resume) |
+| `GET /api/events` | JSON page of stored events, oldest first (`?after=<id>&limit=<n>`, default 200, max 1000) |
+| `/api/runs` | JSON list of recent runs with start, end, status and span counts |
 | `/api/agents` | JSON list of agent summaries (one per agent) |
 | `/api/runs/<run_id>` | JSON span tree of one run (404 + JSON error if unknown; includes `annotations` when the run has any) |
 | `/api/annotations` | JSON list of recent annotations across runs, newest first (`?since=ISO` filters; 400 on a bad value) |
@@ -634,7 +688,8 @@ Event types: `agent.started`, `agent.completed`, `agent.failed`, `agent.message.
 - [x] AMP protocol spec ([docs/amp-spec.md](docs/amp-spec.md))
 - [x] Python SDK (`@mesh.agent` decorator + SQLite event store + `agentmesh tail` CLI)
 - [x] Serve daemon (`agentmesh serve` — live board + JSON API + `POST /api/events` webhook ingestion, stdlib-only)
-- [ ] Real-time Dashboard (React + WebSocket)
+- [x] Real-time Dashboard (React + live SSE stream, `agentmesh up`)
+- [x] Handoffs (AMP v0.4, `mesh.handoff`, `agentmesh handoffs`)
 - [ ] Claude Agent SDK adapter
 - [ ] LangGraph adapter
 
